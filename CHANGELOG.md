@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.3.1...v1.4.0) (2026-08-20)
+
+
+### Features
+
+* remove named statements from a bucket policy ([#10](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/issues/10)) ([b2ec1f2](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/b2ec1f262adfefba4b14f99086dc6a7ffb664ac7))
+
 ## [1.3.1](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.3.0...v1.3.1) (2026-08-20)
 
 
