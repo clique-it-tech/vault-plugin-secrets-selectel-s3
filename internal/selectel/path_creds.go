@@ -10,10 +10,7 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
-const (
-	credentialNamePrefix = "vault-"
-	maxCredentialLife    = 24 * time.Hour
-)
+const credentialNamePrefix = "vault-"
 
 func (b *selectelBackend) s3Credential() *framework.Secret {
 	return &framework.Secret{
@@ -95,11 +92,12 @@ func (b *selectelBackend) pathCredentialsRead(ctx context.Context, req *logical.
 		},
 	)
 
+	// Vault clamps both of these to the mount's own limits, so the role decides
+	// the shape and the operator keeps the last word. Set max_lease_ttl on the
+	// mount deliberately: a Selectel key has no expiry of its own, and the lease
+	// is the only thing that ends it.
 	resp.Secret.TTL = role.TTL
 	resp.Secret.MaxTTL = role.MaxTTL
-	if resp.Secret.MaxTTL == 0 || resp.Secret.MaxTTL > maxCredentialLife {
-		resp.Secret.MaxTTL = maxCredentialLife
-	}
 
 	return resp, nil
 }

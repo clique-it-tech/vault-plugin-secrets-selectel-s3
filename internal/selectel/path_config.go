@@ -182,16 +182,20 @@ func (b *selectelBackend) pathConfigWrite(ctx context.Context, req *logical.Requ
 		}
 	}
 
-	entry, err := logical.StorageEntryJSON(configStoragePath, config)
-	if err != nil {
-		return nil, err
-	}
-	if err := req.Storage.Put(ctx, entry); err != nil {
+	if err := storeConfig(ctx, req.Storage, config); err != nil {
 		return nil, err
 	}
 
 	b.reset()
 	return nil, nil
+}
+
+func storeConfig(ctx context.Context, s logical.Storage, config *selectelConfig) error {
+	entry, err := logical.StorageEntryJSON(configStoragePath, config)
+	if err != nil {
+		return err
+	}
+	return s.Put(ctx, entry)
 }
 
 func (b *selectelBackend) pathConfigDelete(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {

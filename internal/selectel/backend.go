@@ -40,6 +40,7 @@ func backend() *selectelBackend {
 			pathRoles(b),
 			[]*framework.Path{
 				pathConfig(b),
+				pathRotateRoot(b),
 				pathCredentials(b),
 				pathSweep(b),
 			},

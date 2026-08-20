@@ -24,6 +24,8 @@ type fakeSelectel struct {
 	policies    map[string]string
 	readableBy  map[string]struct{}
 	keyOwners   map[string]string
+	passwords   map[string]string
+	refusePatch bool
 	deleted     []string
 	created     []string
 	removed     []string
@@ -38,6 +40,7 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 		users:       map[string]serviceUser{},
 		policies:    map[string]string{},
 		keyOwners:   map[string]string{},
+		passwords:   map[string]string{},
 	}
 
 	mux := http.NewServeMux()
@@ -59,6 +62,19 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		if !strings.Contains(r.URL.Path, "/credentials") {
+			if r.Method == http.MethodPatch {
+				if f.refusePatch {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				var body struct {
+					Password string `json:"password"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				f.passwords[parts[len(parts)-1]] = body.Password
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			if r.Method != http.MethodDelete {
 				w.WriteHeader(http.StatusNotFound)
 				return
@@ -580,5 +596,46 @@ func TestTheEngineNeverIssuesAKeyForAnotherRole(t *testing.T) {
 		if owner == "id-s3-first" {
 			t.Fatal("provisioning one role must never mint a key for another")
 		}
+	}
+}
+
+func TestRotateRootReplacesThePassword(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "config/rotate-root", map[string]any{})
+
+	fake.lock.Lock()
+	defer fake.lock.Unlock()
+	if fake.passwords["user-stronghold"] == "" {
+		t.Fatal("expected a new password to reach selectel")
+	}
+	if fake.passwords["user-stronghold"] == "secret" {
+		t.Fatal("the password must actually change")
+	}
+}
+
+func TestRotateRootKeepsTheOldPasswordWhenSelectelRefuses(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	fake.lock.Lock()
+	fake.refusePatch = true
+	fake.lock.Unlock()
+
+	if _, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "config/rotate-root",
+		Storage:   s,
+	}); err == nil {
+		t.Fatal("expected the rotation to fail")
+	}
+
+	stored, err := getConfig(context.Background(), s)
+	if err != nil {
+		t.Fatalf("could not read the config back: %v", err)
+	}
+	if stored.Password != "secret" {
+		t.Fatalf("a failed rotation must leave the old password in place, got %q", stored.Password)
 	}
 }

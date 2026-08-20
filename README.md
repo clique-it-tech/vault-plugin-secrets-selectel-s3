@@ -91,7 +91,11 @@ changes nothing. Deleting the role reverses both steps.
 | `bucket` | Bucket to grant. Omit it to manage the policy yourself |
 | `service_user_id` | Bind to an existing user instead of creating one |
 | `ttl` | How long a key lives before Vault deletes it |
-| `max_ttl` | Ceiling for renewals, capped at 24h by the engine |
+| `max_ttl` | Ceiling for renewals |
+
+Vault clamps both to the mount's own limits. Set `max_lease_ttl` on the mount
+deliberately: a Selectel key never expires by itself, so the lease is the only
+thing that ends it.
 
 ### Why a bucket policy takes two more identities
 
@@ -115,6 +119,21 @@ The first role on a bucket the engine has not touched before is the one case tha
 needs a person: nobody can read the policy yet, so grant `s3-vault-policy-reader`
 `s3:GetBucketPolicy` on that bucket once. The engine reports the exact id to grant
 when it hits this.
+
+## Rotating the engine's own password
+
+The password written at configuration time is the one credential the engine
+cannot lease. Rotate it as soon as the engine works, and on a schedule after
+that:
+
+```shell
+vault write -f selectel/config/rotate-root
+```
+
+The engine generates a new password, sets it in Selectel and stores it; from
+then on nobody knows it, including whoever first configured the engine. Storage
+is written before Selectel, so a rotation Selectel refuses is rolled back rather
+than leaving the engine locked out of its own account.
 
 ## Issue a key
 
