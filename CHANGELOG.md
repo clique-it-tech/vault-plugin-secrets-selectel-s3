@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.0.1...v1.0.2) (2026-08-20)
+
+
+### Bug Fixes
+
+* send the payload hash header when signing s3 requests ([e94e07a](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/e94e07ab208b670ebd07044c7811a57b747c0126))
+
 ## [1.0.1](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.0.0...v1.0.1) (2026-08-20)
 
 
