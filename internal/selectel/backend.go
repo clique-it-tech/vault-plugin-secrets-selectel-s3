@@ -41,6 +41,7 @@ func backend() *selectelBackend {
 			[]*framework.Path{
 				pathConfig(b),
 				pathRotateRoot(b),
+				pathAdoptBucket(b),
 				pathCredentials(b),
 				pathSweep(b),
 			},

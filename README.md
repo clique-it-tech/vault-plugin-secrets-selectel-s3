@@ -115,10 +115,22 @@ Consumers' service users are never used for either. Provisioning one role never
 issues a credential belonging to another, so a Vault policy that grants one role
 cannot cause a key to appear on someone else's user.
 
-The first role on a bucket the engine has not touched before is the one case that
-needs a person: nobody can read the policy yet, so grant `s3-vault-policy-reader`
-`s3:GetBucketPolicy` on that bucket once. The engine reports the exact id to grant
-when it hits this.
+A bucket that existed before the engine has to be handed over once, because
+nobody the engine controls is named in its policy yet. Do that through the engine
+rather than by hand:
+
+```shell
+aws --endpoint-url "$ENDPOINT" s3api get-bucket-policy --bucket aether \
+  --output text --query Policy > policy.json
+
+vault write selectel/config/adopt-bucket/aether \
+  project_id=<uuid> policy=@policy.json
+```
+
+Read the policy with any key the bucket already names. The engine writes itself
+in, keeping every statement it was handed, and then proves it can read the bucket
+before reporting success. Adopting the same bucket again is a no-op, and a bucket
+created after the engine needs no adoption at all.
 
 ## Rotating the engine's own password
 

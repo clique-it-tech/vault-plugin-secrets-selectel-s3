@@ -22,7 +22,6 @@ type fakeSelectel struct {
 	credentials map[string]credential
 	users       map[string]serviceUser
 	policies    map[string]string
-	readableBy  map[string]struct{}
 	keyOwners   map[string]string
 	passwords   map[string]string
 	refusePatch bool
@@ -168,11 +167,9 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 		if r.URL.Query().Has("policy") {
 			switch r.Method {
 			case http.MethodGet:
-				if f.readableBy != nil {
-					if _, allowed := f.readableBy[f.keyOwner(r.Header.Get("Authorization"))]; !allowed {
-						w.WriteHeader(http.StatusForbidden)
-						return
-					}
+				if !f.mayReadPolicy(trimmed, f.keyOwner(r.Header.Get("Authorization"))) {
+					w.WriteHeader(http.StatusForbidden)
+					return
 				}
 				stored, ok := f.policies[trimmed]
 				if !ok {
@@ -199,6 +196,29 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 // keyOwner maps a signed request back to the service user whose key signed it,
 // so the fake can refuse a read the way Selectel refuses one from a principal
 // the policy does not name.
+// mayReadPolicy answers the way Selectel does: a bucket policy is visible only
+// to a principal it names, whatever role that principal holds.
+func (f *fakeSelectel) mayReadPolicy(bucket, owner string) bool {
+	stored, ok := f.policies[bucket]
+	if !ok {
+		return true
+	}
+
+	policy := new(bucketPolicy)
+	if err := json.Unmarshal([]byte(stored), policy); err != nil {
+		return false
+	}
+
+	for _, st := range policy.Statement {
+		for _, p := range principals(st) {
+			if p == "*" || p == owner {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (f *fakeSelectel) keyOwner(authorization string) string {
 	for accessKey, owner := range f.keyOwners {
 		if strings.Contains(authorization, accessKey) {
@@ -563,10 +583,6 @@ func TestTheEngineKeepsItsOwnPolicyReader(t *testing.T) {
 		t.Fatalf("the reader must be granted nothing but the read, got %v", action)
 	}
 
-	fake.lock.Lock()
-	fake.readableBy = map[string]struct{}{"id-" + policyReaderName: {}}
-	fake.lock.Unlock()
-
 	write(t, b, s, "roles/second", map[string]any{"project_id": "project-1", "bucket": "aether"})
 
 	got := principals(policyOf(t, fake, "aether").Statement[0])
@@ -584,7 +600,6 @@ func TestTheEngineNeverIssuesAKeyForAnotherRole(t *testing.T) {
 	write(t, b, s, "roles/first", map[string]any{"project_id": "project-1", "bucket": "aether"})
 
 	fake.lock.Lock()
-	fake.readableBy = map[string]struct{}{"id-" + policyReaderName: {}}
 	fake.keyOwners = map[string]string{}
 	fake.lock.Unlock()
 
@@ -637,5 +652,72 @@ func TestRotateRootKeepsTheOldPasswordWhenSelectelRefuses(t *testing.T) {
 	}
 	if stored.Password != "secret" {
 		t.Fatalf("a failed rotation must leave the old password in place, got %q", stored.Password)
+	}
+}
+
+func TestAdoptingABucketWritesTheEngineIn(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	existing := `{"Version":"2012-10-17","Statement":[{"Sid":"allow-read-object","Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::aether/*"]}]}`
+
+	fake.lock.Lock()
+	fake.policies["aether"] = existing
+	fake.lock.Unlock()
+
+	resp := write(t, b, s, "config/adopt-bucket/aether", map[string]any{
+		"project_id": "project-1",
+		"policy":     existing,
+	})
+	if resp == nil || resp.Data["changed"] != true {
+		t.Fatalf("expected the bucket to be adopted, got %+v", resp)
+	}
+
+	policy := policyOf(t, fake, "aether")
+	if statementAt(policy, "allow-read-object") < 0 {
+		t.Fatal("adopting a bucket must keep the statements it was handed")
+	}
+	if statementAt(policy, readerStatementID) < 0 {
+		t.Fatal("expected the reader to be written in")
+	}
+}
+
+func TestAdoptingRefusesWithoutAPolicyItCannotRead(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	fake.lock.Lock()
+	fake.policies["aether"] = `{"Version":"2012-10-17","Statement":[{"Sid":"x","Effect":"Allow","Principal":{"AWS":["somebody-else"]},"Action":["*"],"Resource":["arn:aws:s3:::aether/*"]}]}`
+	fake.lock.Unlock()
+
+	if _, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "config/adopt-bucket/aether",
+		Data:      map[string]any{"project_id": "project-1"},
+		Storage:   s,
+	}); err == nil {
+		t.Fatal("expected a refusal rather than a blind write")
+	}
+
+	policy := policyOf(t, fake, "aether")
+	if len(policy.Statement) != 1 {
+		t.Fatalf("a refused adoption must not touch the policy, got %+v", policy.Statement)
+	}
+}
+
+func TestAdoptingTwiceChangesNothing(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	existing := `{"Version":"2012-10-17","Statement":[{"Sid":"allow-read-object","Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::aether/*"]}]}`
+	fake.lock.Lock()
+	fake.policies["aether"] = existing
+	fake.lock.Unlock()
+
+	write(t, b, s, "config/adopt-bucket/aether", map[string]any{"project_id": "project-1", "policy": existing})
+
+	resp := write(t, b, s, "config/adopt-bucket/aether", map[string]any{"project_id": "project-1"})
+	if resp == nil || resp.Data["changed"] != false {
+		t.Fatalf("expected the second adoption to be a no-op, got %+v", resp)
 	}
 }

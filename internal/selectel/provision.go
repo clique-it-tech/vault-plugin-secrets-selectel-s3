@@ -205,7 +205,7 @@ func (b *selectelBackend) provisionRole(ctx context.Context, s logical.Storage, 
 		return err
 	}
 
-	policy, err := b.readBucketPolicy(ctx, s, c, role, config)
+	policy, err := b.readBucketPolicy(ctx, c, role, config)
 	if err != nil {
 		return err
 	}
@@ -245,7 +245,7 @@ func (c *client) readerUser(ctx context.Context, projectID string) (*serviceUser
 }
 
 // readBucketPolicy reads the policy as the engine's own reader.
-func (b *selectelBackend) readBucketPolicy(ctx context.Context, s logical.Storage, c *client, role *selectelRole, config *selectelConfig) (*bucketPolicy, error) {
+func (b *selectelBackend) readBucketPolicy(ctx context.Context, c *client, role *selectelRole, config *selectelConfig) (*bucketPolicy, error) {
 	reader, err := c.readerUser(ctx, role.ProjectID)
 	if err != nil {
 		return nil, err
@@ -290,7 +290,7 @@ func (b *selectelBackend) deprovisionRole(ctx context.Context, s logical.Storage
 			return err
 		}
 
-		policy, err := b.readBucketPolicy(ctx, s, c, role, config)
+		policy, err := b.readBucketPolicy(ctx, c, role, config)
 		if err != nil {
 			return err
 		}
