@@ -27,6 +27,7 @@ var bucketActions = []string{
 	"s3:AbortMultipartUpload",
 	"s3:DeleteObject",
 	"s3:GetBucketCORS",
+	"s3:GetBucketPolicy",
 	"s3:GetBucketLocation",
 	"s3:GetBucketVersioning",
 	"s3:GetObject",

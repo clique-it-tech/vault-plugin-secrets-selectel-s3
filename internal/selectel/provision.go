@@ -200,19 +200,48 @@ func (b *selectelBackend) provisionRole(ctx context.Context, s logical.Storage, 
 		return err
 	}
 
+	policy, err := c.readBucketPolicy(ctx, role, config)
+	if err != nil {
+		return err
+	}
+	if !grantBucketAccess(policy, role.Bucket, role.ServiceUserID) {
+		return nil
+	}
+
 	return c.withS3Admin(ctx, role.ProjectID, config.S3Endpoint, config.S3Region, func(s3 *s3Client) error {
-		policy, err := s3.getBucketPolicy(ctx, role.Bucket)
-		if err != nil {
-			return fmt.Errorf("could not read the policy of %s: %w", role.Bucket, err)
-		}
-		if !grantBucketAccess(policy, role.Bucket, role.ServiceUserID) {
-			return nil
-		}
 		if err := s3.putBucketPolicy(ctx, role.Bucket, policy); err != nil {
 			return fmt.Errorf("could not update the policy of %s: %w", role.Bucket, err)
 		}
 		return nil
 	})
+}
+
+// readBucketPolicy reads through a key of the role's own service user. Selectel
+// lets s3.admin write a bucket policy but not read one, so the only identity
+// that can see the current policy is a principal the policy already names. That
+// makes the first grant on a bucket an operator's job; afterwards the engine
+// names itself and can keep the policy up to date on its own.
+func (c *client) readBucketPolicy(ctx context.Context, role *selectelRole, config *selectelConfig) (*bucketPolicy, error) {
+	cred, err := c.createCredential(ctx, role.ServiceUserID, &credentialRequest{
+		Name:      fmt.Sprintf("policy-read-%d", time.Now().UnixNano()),
+		ProjectID: role.ProjectID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("could not issue a key to read the policy: %w", err)
+	}
+	defer func() {
+		_ = c.deleteCredential(ctx, role.ServiceUserID, cred.AccessKey)
+	}()
+
+	s3 := newS3Client(config.S3Endpoint, config.S3Region, cred.AccessKey, cred.SecretKey)
+	policy, err := s3.getBucketPolicy(ctx, role.Bucket)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"could not read the policy of %s: %w. Selectel only shows a bucket policy to a principal it already names, "+
+				"so grant %s s3:GetBucketPolicy on that bucket once, then this role manages itself",
+			role.Bucket, err, role.ServiceUserID)
+	}
+	return policy, nil
 }
 
 // deprovisionRole undoes provisionRole. The service user is removed last,
@@ -232,16 +261,15 @@ func (b *selectelBackend) deprovisionRole(ctx context.Context, s logical.Storage
 			return err
 		}
 
-		err = c.withS3Admin(ctx, role.ProjectID, config.S3Endpoint, config.S3Region, func(s3 *s3Client) error {
-			policy, err := s3.getBucketPolicy(ctx, role.Bucket)
-			if err != nil {
-				return err
-			}
-			if !revokeBucketAccess(policy, role.ServiceUserID) {
-				return nil
-			}
-			return s3.putBucketPolicy(ctx, role.Bucket, policy)
-		})
+		policy, err := c.readBucketPolicy(ctx, role, config)
+		if err != nil {
+			return err
+		}
+		if revokeBucketAccess(policy, role.ServiceUserID) {
+			err = c.withS3Admin(ctx, role.ProjectID, config.S3Endpoint, config.S3Region, func(s3 *s3Client) error {
+				return s3.putBucketPolicy(ctx, role.Bucket, policy)
+			})
+		}
 		if err != nil {
 			return fmt.Errorf("could not take %s out of the policy of %s: %w", role.ServiceUserID, role.Bucket, err)
 		}
