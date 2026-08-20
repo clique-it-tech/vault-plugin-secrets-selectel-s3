@@ -809,3 +809,108 @@ func TestAdoptingTwiceChangesNothing(t *testing.T) {
 		t.Fatalf("expected the second adoption to be a no-op, got %+v", resp)
 	}
 }
+
+func adoptedBucket(t *testing.T, fake *fakeSelectel, b logical.Backend, s logical.Storage, policy string) {
+	t.Helper()
+	fake.lock.Lock()
+	fake.policies["aether"] = policy
+	fake.lock.Unlock()
+	write(t, b, s, "config/adopt-bucket/aether", map[string]any{
+		"project_id": "project-1",
+		"policy":     policy,
+	})
+}
+
+func TestDroppingAStatementLeavesTheRestAlone(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+	adoptedBucket(t, fake, b, s, `{"Version":"2012-10-17","Statement":[`+
+		`{"Sid":"allow-all-sa","Effect":"Allow","Principal":{"AWS":["*"]},"Action":["*"],"Resource":["arn:aws:s3:::aether"]},`+
+		`{"Sid":"allow-read-object","Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::aether/*"]}]}`)
+
+	resp := write(t, b, s, "config/drop-statement/aether", map[string]any{
+		"project_id": "project-1",
+		"sids":       "allow-all-sa",
+	})
+	if got := resp.Data["removed"].([]string); len(got) != 1 || got[0] != "allow-all-sa" {
+		t.Fatalf("expected allow-all-sa to be removed, got %v", got)
+	}
+
+	policy := policyOf(t, fake, "aether")
+	if statementAt(policy, "allow-all-sa") >= 0 {
+		t.Fatal("the blanket statement should be gone")
+	}
+	if statementAt(policy, "allow-read-object") < 0 {
+		t.Fatal("a deliberately public statement must survive")
+	}
+	if statementAt(policy, readerStatementID) < 0 {
+		t.Fatal("the engine must keep its own reader")
+	}
+}
+
+func TestDroppingRefusesTheEnginesOwnStatements(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+	adoptedBucket(t, fake, b, s, `{"Version":"2012-10-17","Statement":[`+
+		`{"Sid":"allow-read-object","Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::aether/*"]}]}`)
+
+	for _, sid := range []string{vaultStatementID, readerStatementID} {
+		resp, err := b.HandleRequest(context.Background(), &logical.Request{
+			Operation: logical.UpdateOperation,
+			Path:      "config/drop-statement/aether",
+			Storage:   s,
+			Data:      map[string]any{"project_id": "project-1", "sids": sid},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp == nil || !resp.IsError() {
+			t.Fatalf("dropping %s must be refused, got %v", sid, resp)
+		}
+	}
+	if statementAt(policyOf(t, fake, "aether"), readerStatementID) < 0 {
+		t.Fatal("the reader must still be there")
+	}
+}
+
+func TestDroppingReportsSidsThatWereNotThere(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+	adoptedBucket(t, fake, b, s, `{"Version":"2012-10-17","Statement":[`+
+		`{"Sid":"allow-read-object","Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::aether/*"]}]}`)
+
+	resp := write(t, b, s, "config/drop-statement/aether", map[string]any{
+		"project_id": "project-1",
+		"sids":       "never-existed",
+	})
+	if got := resp.Data["removed"].([]string); len(got) != 0 {
+		t.Fatalf("nothing should have been removed, got %v", got)
+	}
+	if got := resp.Data["not_found"].([]string); len(got) != 1 || got[0] != "never-existed" {
+		t.Fatalf("expected the missing sid to be reported, got %v", got)
+	}
+}
+
+func TestDroppingRefusesToEmptyThePolicy(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+	adoptedBucket(t, fake, b, s, `{"Version":"2012-10-17","Statement":[`+
+		`{"Sid":"only-one","Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::aether/*"]}]}`)
+
+	fake.lock.Lock()
+	fake.policies["aether"] = `{"Version":"2012-10-17","Statement":[{"Sid":"only-one","Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::aether/*"]}]}`
+	fake.lock.Unlock()
+
+	resp, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "config/drop-statement/aether",
+		Storage:   s,
+		Data:      map[string]any{"project_id": "project-1", "sids": "only-one"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("emptying a policy must be refused, got %v", resp)
+	}
+}
