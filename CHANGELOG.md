@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.0.0...v1.0.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* read the bucket policy as the role's own user ([29ec42a](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/29ec42a5f7b04c86d3dea99fef0537515e44e1d7))
+
 ## 1.0.0 (2026-08-20)
 
 
