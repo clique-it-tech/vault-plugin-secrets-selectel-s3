@@ -132,6 +132,39 @@ in, keeping every statement it was handed, and then proves it can read the bucke
 before reporting success. Adopting the same bucket again is a no-op, and a bucket
 created after the engine needs no adoption at all.
 
+## Trimming a bucket policy
+
+Buckets that predate the engine often carry a blanket statement — every principal
+in the account, every action — left over from before anything scoped access
+properly. Remove it by name:
+
+```sh
+vault write selectel/config/drop-statement/clq-expo-ota \
+  project_id=<project> \
+  sids=allow-all-sa
+```
+
+```
+Key          Value
+---          -----
+bucket       clq-expo-ota
+removed      [allow-all-sa]
+not_found    []
+remaining    [allow-vault-policy-reader allow-vault-issued]
+```
+
+Statements are named explicitly rather than filtered by shape, because "drop
+everything the engine did not write" is the wrong instrument: a bucket serving a
+CDN needs its anonymous `s3:GetObject` rule, and a blunt sweep would take it out
+along with the blanket grant. Naming what goes makes the dangerous case
+impossible to reach by accident.
+
+Two refusals are built in. The engine's own statements cannot be dropped, since
+losing them costs it the access it needs to manage the bucket at all; and a
+request that would leave the policy with no statements is rejected rather than
+emptying it. The bucket must already be adopted, because the engine reads the
+policy before editing it.
+
 ## Rotating the engine's own password
 
 The password written at configuration time is the one credential the engine
