@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.1.1...v1.2.0) (2026-08-20)
+
+
+### Features
+
+* rotate the engine password from the engine ([9cd5916](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/9cd5916f934ed49b1240ab7100ca45d6d09017f5))
+
 ## [1.1.1](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.1.0...v1.1.1) (2026-08-20)
 
 
