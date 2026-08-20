@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.1.0...v1.1.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* read policies as the engine, not as a consumer ([00303d5](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/00303d53ca6165c63efd5d4731b8c511eb0ae665))
+
 ## [1.1.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.0.2...v1.1.0) (2026-08-20)
 
 
