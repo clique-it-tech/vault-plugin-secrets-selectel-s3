@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.2.0...v1.3.0) (2026-08-20)
+
+
+### Features
+
+* adopt a bucket the engine cannot read yet ([6bef766](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/6bef766306d790a6b5a1a6cb8df105f29b423355))
+
 ## [1.2.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.1.1...v1.2.0) (2026-08-20)
 
 
