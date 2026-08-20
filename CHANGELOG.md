@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.0.2...v1.1.0) (2026-08-20)
+
+
+### Features
+
+* borrow a sibling role to read a bucket policy ([e2c638e](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/e2c638e995b6e4c382ce0665c228ebdb9ec96186))
+
 ## [1.0.2](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.0.1...v1.0.2) (2026-08-20)
 
 
