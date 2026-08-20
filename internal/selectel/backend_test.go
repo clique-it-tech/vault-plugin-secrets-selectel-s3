@@ -22,6 +22,8 @@ type fakeSelectel struct {
 	credentials map[string]credential
 	users       map[string]serviceUser
 	policies    map[string]string
+	readableBy  map[string]struct{}
+	keyOwners   map[string]string
 	deleted     []string
 	created     []string
 	removed     []string
@@ -35,6 +37,7 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 		credentials: map[string]credential{},
 		users:       map[string]serviceUser{},
 		policies:    map[string]string{},
+		keyOwners:   map[string]string{},
 	}
 
 	mux := http.NewServeMux()
@@ -83,6 +86,7 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 				ProjectID: body.ProjectID,
 			}
 			f.credentials[cred.AccessKey] = cred
+			f.keyOwners[cred.AccessKey] = parts[len(parts)-2]
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(cred)
 		case r.Method == http.MethodGet:
@@ -148,6 +152,12 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 		if r.URL.Query().Has("policy") {
 			switch r.Method {
 			case http.MethodGet:
+				if f.readableBy != nil {
+					if _, allowed := f.readableBy[f.keyOwner(r.Header.Get("Authorization"))]; !allowed {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+				}
 				stored, ok := f.policies[trimmed]
 				if !ok {
 					w.WriteHeader(http.StatusNotFound)
@@ -168,6 +178,18 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 	f.server = httptest.NewServer(mux)
 	t.Cleanup(f.server.Close)
 	return f
+}
+
+// keyOwner maps a signed request back to the service user whose key signed it,
+// so the fake can refuse a read the way Selectel refuses one from a principal
+// the policy does not name.
+func (f *fakeSelectel) keyOwner(authorization string) string {
+	for accessKey, owner := range f.keyOwners {
+		if strings.Contains(authorization, accessKey) {
+			return owner
+		}
+	}
+	return ""
 }
 
 func testBackend(t *testing.T, fake *fakeSelectel) (logical.Backend, logical.Storage) {
@@ -500,5 +522,26 @@ func TestDeletingARoleTakesTheUserBackOut(t *testing.T) {
 	defer fake.lock.Unlock()
 	if _, alive := fake.users["id-s3-storage"]; alive {
 		t.Fatal("the service user should have been removed with the role")
+	}
+}
+
+func TestANewRoleBorrowsASiblingToReadThePolicy(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/first", map[string]any{"project_id": "project-1", "bucket": "aether"})
+
+	fake.lock.Lock()
+	fake.readableBy = map[string]struct{}{"id-s3-first": {}}
+	fake.lock.Unlock()
+
+	write(t, b, s, "roles/second", map[string]any{"project_id": "project-1", "bucket": "aether"})
+
+	policy := policyOf(t, fake, "aether")
+	got := principals(policy.Statement[0])
+	for _, want := range []string{"id-s3-first", "id-s3-second"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("expected %s in the policy, got %v", want, got)
+		}
 	}
 }

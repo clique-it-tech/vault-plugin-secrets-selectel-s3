@@ -200,7 +200,7 @@ func (b *selectelBackend) provisionRole(ctx context.Context, s logical.Storage, 
 		return err
 	}
 
-	policy, err := c.readBucketPolicy(ctx, role, config)
+	policy, err := b.readBucketPolicyForRole(ctx, s, c, role, config)
 	if err != nil {
 		return err
 	}
@@ -216,7 +216,40 @@ func (b *selectelBackend) provisionRole(ctx context.Context, s logical.Storage, 
 	})
 }
 
-// readBucketPolicy reads through a key of the role's own service user. Selectel
+// readBucketPolicyForRole reads the policy through whichever service user the
+// policy already names. A role's own user works once it has been granted, but a
+// brand new one has not been yet, so the engine falls back to a sibling role
+// bound to the same bucket. Only the very first role on a bucket has nobody to
+// borrow from, and that one needs an operator.
+func (b *selectelBackend) readBucketPolicyForRole(ctx context.Context, s logical.Storage, c *client, role *selectelRole, config *selectelConfig) (*bucketPolicy, error) {
+	policy, err := c.readBucketPolicy(ctx, role, config)
+	if err == nil {
+		return policy, nil
+	}
+	first := err
+
+	names, listErr := s.List(ctx, rolesStoragePrefix)
+	if listErr != nil {
+		return nil, first
+	}
+
+	for _, name := range names {
+		sibling, getErr := getRole(ctx, s, name)
+		if getErr != nil || sibling == nil {
+			continue
+		}
+		if sibling.Bucket != role.Bucket || sibling.ServiceUserID == role.ServiceUserID || sibling.ServiceUserID == "" {
+			continue
+		}
+		if policy, err := c.readBucketPolicy(ctx, sibling, config); err == nil {
+			return policy, nil
+		}
+	}
+
+	return nil, first
+}
+
+// readBucketPolicy reads through a key of the given role's service user. Selectel
 // lets s3.admin write a bucket policy but not read one, so the only identity
 // that can see the current policy is a principal the policy already names. That
 // makes the first grant on a bucket an operator's job; afterwards the engine
@@ -261,7 +294,7 @@ func (b *selectelBackend) deprovisionRole(ctx context.Context, s logical.Storage
 			return err
 		}
 
-		policy, err := c.readBucketPolicy(ctx, role, config)
+		policy, err := b.readBucketPolicyForRole(ctx, s, c, role, config)
 		if err != nil {
 			return err
 		}
