@@ -70,20 +70,37 @@ seal-wrapped and is never returned by a read.
 
 ## Roles
 
+Writing a role provisions everything it needs:
+
 ```shell
 vault write selectel/roles/storage \
-  service_user_id=<uuid of the service user> \
   project_id=<uuid of the project> \
+  bucket=aether \
   ttl=1h \
   max_ttl=8h
 ```
 
+The engine creates a service user named `s3-<role>` with the `s3.user` role, then
+adds it to the bucket's policy under the statement id `allow-vault-issued`.
+Statements it did not write are left alone, and rewriting an unchanged role
+changes nothing. Deleting the role reverses both steps.
+
 | Field | Meaning |
 | --- | --- |
-| `service_user_id` | Whose permissions the issued key inherits |
-| `project_id` | Project the key is created in |
+| `project_id` | Project the service user and its keys live in |
+| `bucket` | Bucket to grant. Omit it to manage the policy yourself |
+| `service_user_id` | Bind to an existing user instead of creating one |
 | `ttl` | How long a key lives before Vault deletes it |
 | `max_ttl` | Ceiling for renewals, capped at 24h by the engine |
+
+### Why a bucket policy needs a second identity
+
+Selectel refuses `PutBucketPolicy` to anything below the `s3.admin` role, and
+that role carries full control of every bucket in the project. Rather than hold
+it permanently, the engine creates a service user with `s3.admin`, uses its key
+for the single policy call, and deletes the user before returning — including
+when the call fails. The engine's own credential keeps `iam.admin` and nothing
+more, so a leak of the configured password cannot reach object data.
 
 ## Issue a key
 

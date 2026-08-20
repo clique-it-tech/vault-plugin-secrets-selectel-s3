@@ -12,10 +12,12 @@ import (
 const rolesStoragePrefix = "roles/"
 
 type selectelRole struct {
-	ServiceUserID string        `json:"service_user_id"`
-	ProjectID     string        `json:"project_id"`
-	TTL           time.Duration `json:"ttl"`
-	MaxTTL        time.Duration `json:"max_ttl"`
+	ServiceUserID   string        `json:"service_user_id"`
+	ServiceUserName string        `json:"service_user_name"`
+	ProjectID       string        `json:"project_id"`
+	Bucket          string        `json:"bucket"`
+	TTL             time.Duration `json:"ttl"`
+	MaxTTL          time.Duration `json:"max_ttl"`
 }
 
 func roleNotFound(name string) error {
@@ -38,8 +40,11 @@ func pathRoles(b *selectelBackend) []*framework.Path {
 				},
 				"service_user_id": {
 					Type:        framework.TypeString,
-					Description: "Service user whose permissions the issued key inherits. Selectel attaches bucket access to the user, not to the key, so one user per consumer is what keeps roles apart.",
-					Required:    true,
+					Description: "Existing service user to bind to. Leave it out and the engine creates one named after the role.",
+				},
+				"bucket": {
+					Type:        framework.TypeString,
+					Description: "Bucket this role may reach. Writing the role adds its service user to that bucket's policy; deleting the role takes it back out.",
 				},
 				"project_id": {
 					Type:        framework.TypeString,
@@ -114,10 +119,12 @@ func (b *selectelBackend) pathRolesRead(ctx context.Context, req *logical.Reques
 
 	return &logical.Response{
 		Data: map[string]any{
-			"service_user_id": role.ServiceUserID,
-			"project_id":      role.ProjectID,
-			"ttl":             int64(role.TTL.Seconds()),
-			"max_ttl":         int64(role.MaxTTL.Seconds()),
+			"service_user_id":   role.ServiceUserID,
+			"service_user_name": role.ServiceUserName,
+			"project_id":        role.ProjectID,
+			"bucket":            role.Bucket,
+			"ttl":               int64(role.TTL.Seconds()),
+			"max_ttl":           int64(role.MaxTTL.Seconds()),
 		},
 	}, nil
 }
@@ -139,6 +146,9 @@ func (b *selectelBackend) pathRolesWrite(ctx context.Context, req *logical.Reque
 	if raw, ok := data.GetOk("project_id"); ok {
 		role.ProjectID = raw.(string)
 	}
+	if raw, ok := data.GetOk("bucket"); ok {
+		role.Bucket = raw.(string)
+	}
 	if raw, ok := data.GetOk("ttl"); ok {
 		role.TTL = time.Duration(raw.(int)) * time.Second
 	}
@@ -146,11 +156,11 @@ func (b *selectelBackend) pathRolesWrite(ctx context.Context, req *logical.Reque
 		role.MaxTTL = time.Duration(raw.(int)) * time.Second
 	}
 
-	if role.ServiceUserID == "" {
-		return logical.ErrorResponse("service_user_id is required"), nil
-	}
 	if role.ProjectID == "" {
 		return logical.ErrorResponse("project_id is required"), nil
+	}
+	if err := b.provisionRole(ctx, req.Storage, name, role); err != nil {
+		return nil, err
 	}
 	if role.MaxTTL != 0 && role.TTL > role.MaxTTL {
 		return logical.ErrorResponse("ttl cannot be longer than max_ttl"), nil
@@ -168,7 +178,19 @@ func (b *selectelBackend) pathRolesWrite(ctx context.Context, req *logical.Reque
 }
 
 func (b *selectelBackend) pathRolesDelete(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	if err := req.Storage.Delete(ctx, rolesStoragePrefix+data.Get("name").(string)); err != nil {
+	name := data.Get("name").(string)
+
+	role, err := getRole(ctx, req.Storage, name)
+	if err != nil {
+		return nil, err
+	}
+	if role != nil {
+		if err := b.deprovisionRole(ctx, req.Storage, role); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := req.Storage.Delete(ctx, rolesStoragePrefix+name); err != nil {
 		return nil, err
 	}
 	return nil, nil

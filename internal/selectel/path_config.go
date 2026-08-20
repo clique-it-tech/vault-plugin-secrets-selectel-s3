@@ -12,6 +12,8 @@ const (
 	configStoragePath = "config"
 	defaultAuthURL    = "https://cloud.api.selcloud.ru/identity/v3"
 	defaultIAMURL     = "https://api.selectel.ru"
+	defaultS3Endpoint = "https://s3.ru-7.storage.selcloud.ru"
+	defaultS3Region   = "ru-7"
 )
 
 var errMissingConfig = errors.New("write config before asking for credentials")
@@ -22,6 +24,9 @@ type selectelConfig struct {
 	AccountID string `json:"account_id"`
 	UserID    string `json:"user_id"`
 	Password  string `json:"password"`
+
+	S3Endpoint string `json:"s3_endpoint"`
+	S3Region   string `json:"s3_region"`
 }
 
 func pathConfig(b *selectelBackend) *framework.Path {
@@ -58,6 +63,16 @@ func pathConfig(b *selectelBackend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "Base URL of the Selectel IAM API.",
 				Default:     defaultIAMURL,
+			},
+			"s3_endpoint": {
+				Type:        framework.TypeString,
+				Description: "Object storage endpoint, used when a role manages a bucket policy.",
+				Default:     defaultS3Endpoint,
+			},
+			"s3_region": {
+				Type:        framework.TypeString,
+				Description: "Region the object storage endpoint belongs to.",
+				Default:     defaultS3Region,
 			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
@@ -103,10 +118,12 @@ func (b *selectelBackend) pathConfigRead(ctx context.Context, req *logical.Reque
 
 	return &logical.Response{
 		Data: map[string]any{
-			"account_id": config.AccountID,
-			"user_id":    config.UserID,
-			"auth_url":   config.AuthURL,
-			"iam_url":    config.IAMURL,
+			"account_id":  config.AccountID,
+			"user_id":     config.UserID,
+			"auth_url":    config.AuthURL,
+			"iam_url":     config.IAMURL,
+			"s3_endpoint": config.S3Endpoint,
+			"s3_region":   config.S3Region,
 		},
 	}, nil
 }
@@ -135,12 +152,24 @@ func (b *selectelBackend) pathConfigWrite(ctx context.Context, req *logical.Requ
 	if raw, ok := data.GetOk("iam_url"); ok {
 		config.IAMURL = raw.(string)
 	}
+	if raw, ok := data.GetOk("s3_endpoint"); ok {
+		config.S3Endpoint = raw.(string)
+	}
+	if raw, ok := data.GetOk("s3_region"); ok {
+		config.S3Region = raw.(string)
+	}
 
 	if config.AuthURL == "" {
 		config.AuthURL = defaultAuthURL
 	}
 	if config.IAMURL == "" {
 		config.IAMURL = defaultIAMURL
+	}
+	if config.S3Endpoint == "" {
+		config.S3Endpoint = defaultS3Endpoint
+	}
+	if config.S3Region == "" {
+		config.S3Region = defaultS3Region
 	}
 
 	for field, value := range map[string]string{

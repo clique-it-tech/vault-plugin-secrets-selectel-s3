@@ -3,8 +3,10 @@ package selectel
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,14 +20,22 @@ type fakeSelectel struct {
 
 	lock        sync.Mutex
 	credentials map[string]credential
+	users       map[string]serviceUser
+	policies    map[string]string
 	deleted     []string
+	created     []string
+	removed     []string
 	issued      int
 }
 
 func newFakeSelectel(t *testing.T) *fakeSelectel {
 	t.Helper()
 
-	f := &fakeSelectel{credentials: map[string]credential{}}
+	f := &fakeSelectel{
+		credentials: map[string]credential{},
+		users:       map[string]serviceUser{},
+		policies:    map[string]string{},
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/identity/v3/auth/tokens", func(w http.ResponseWriter, _ *http.Request) {
@@ -45,6 +55,22 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 		defer f.lock.Unlock()
 
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if !strings.Contains(r.URL.Path, "/credentials") {
+			if r.Method != http.MethodDelete {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			id := parts[len(parts)-1]
+			if _, ok := f.users[id]; !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			delete(f.users, id)
+			f.removed = append(f.removed, id)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
 		switch {
 		case r.Method == http.MethodPost:
 			f.issued++
@@ -77,6 +103,68 @@ func newFakeSelectel(t *testing.T) *fakeSelectel {
 		}
 	})
 
+	mux.HandleFunc("/iam/v1/service_users", func(w http.ResponseWriter, r *http.Request) {
+		f.lock.Lock()
+		defer f.lock.Unlock()
+
+		switch r.Method {
+		case http.MethodPost:
+			var body serviceUserRequest
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.Password == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			user := serviceUser{ID: "id-" + body.Name, Name: body.Name, Enabled: true, Roles: body.Roles}
+			f.users[user.ID] = user
+			f.created = append(f.created, body.Name)
+			_ = json.NewEncoder(w).Encode(user)
+		case http.MethodGet:
+			list := serviceUserList{}
+			for _, u := range f.users {
+				list.Users = append(list.Users, u)
+			}
+			_ = json.NewEncoder(w).Encode(list)
+		}
+	})
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		f.lock.Lock()
+		defer f.lock.Unlock()
+
+		trimmed := strings.Trim(r.URL.Path, "/")
+		if strings.HasPrefix(trimmed, "iam/v1/service_users/") && r.Method == http.MethodDelete {
+			id := strings.TrimPrefix(trimmed, "iam/v1/service_users/")
+			if _, ok := f.users[id]; !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			delete(f.users, id)
+			f.removed = append(f.removed, id)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		if r.URL.Query().Has("policy") {
+			switch r.Method {
+			case http.MethodGet:
+				stored, ok := f.policies[trimmed]
+				if !ok {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				_, _ = w.Write([]byte(stored))
+			case http.MethodPut:
+				body, _ := io.ReadAll(r.Body)
+				f.policies[trimmed] = string(body)
+				w.WriteHeader(http.StatusNoContent)
+			}
+			return
+		}
+
+		w.WriteHeader(http.StatusNotFound)
+	})
+
 	f.server = httptest.NewServer(mux)
 	t.Cleanup(f.server.Close)
 	return f
@@ -100,8 +188,10 @@ func testBackend(t *testing.T, fake *fakeSelectel) (logical.Backend, logical.Sto
 		"user_id":    "user-stronghold",
 		"password":   "secret",
 
-		"auth_url": fake.server.URL + "/identity/v3",
-		"iam_url":  fake.server.URL,
+		"auth_url":    fake.server.URL + "/identity/v3",
+		"iam_url":     fake.server.URL,
+		"s3_endpoint": fake.server.URL,
+		"s3_region":   "ru-7",
 	})
 
 	return b, storage
@@ -282,5 +372,133 @@ func TestConfigNeverReturnsThePassword(t *testing.T) {
 	resp := read(t, b, s, "config")
 	if _, leaked := resp.Data["password"]; leaked {
 		t.Fatal("the password must never be readable")
+	}
+}
+
+func policyOf(t *testing.T, fake *fakeSelectel, bucket string) *bucketPolicy {
+	t.Helper()
+	fake.lock.Lock()
+	defer fake.lock.Unlock()
+
+	stored, ok := fake.policies[bucket]
+	if !ok {
+		t.Fatalf("bucket %s has no policy", bucket)
+	}
+	policy := new(bucketPolicy)
+	if err := json.Unmarshal([]byte(stored), policy); err != nil {
+		t.Fatalf("stored policy is not json: %v", err)
+	}
+	return policy
+}
+
+func TestWritingARoleCreatesItsServiceUser(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/storage", map[string]any{"project_id": "project-1"})
+
+	resp := read(t, b, s, "roles/storage")
+	if resp.Data["service_user_name"] != "s3-storage" {
+		t.Fatalf("expected the user to be named after the role, got %v", resp.Data["service_user_name"])
+	}
+	if resp.Data["service_user_id"] != "id-s3-storage" {
+		t.Fatalf("expected the created id to be remembered, got %v", resp.Data["service_user_id"])
+	}
+
+	fake.lock.Lock()
+	defer fake.lock.Unlock()
+	if !slices.Contains(fake.created, "s3-storage") {
+		t.Fatalf("expected s3-storage to be created, got %v", fake.created)
+	}
+}
+
+func TestWritingARoleGrantsTheBucketAndCleansUpTheAdmin(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/storage", map[string]any{"project_id": "project-1", "bucket": "aether"})
+
+	policy := policyOf(t, fake, "aether")
+	if len(policy.Statement) != 1 || policy.Statement[0].Sid != vaultStatementID {
+		t.Fatalf("expected one vault statement, got %+v", policy.Statement)
+	}
+	if got := principals(policy.Statement[0]); !slices.Contains(got, "id-s3-storage") {
+		t.Fatalf("expected the service user in the policy, got %v", got)
+	}
+
+	fake.lock.Lock()
+	defer fake.lock.Unlock()
+	for _, name := range fake.created {
+		if strings.HasPrefix(name, adminNamePrefix) {
+			if !slices.Contains(fake.removed, "id-"+name) {
+				t.Fatalf("the temporary admin %s outlived the operation", name)
+			}
+		}
+	}
+	if len(fake.users) != 1 {
+		t.Fatalf("only the role's own user should remain, got %v", fake.users)
+	}
+}
+
+func TestWritingARoleKeepsForeignStatements(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	fake.lock.Lock()
+	fake.policies["aether"] = `{"Version":"2012-10-17","Statement":[{"Sid":"allow-read-object","Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::aether/*"]}]}`
+	fake.lock.Unlock()
+
+	write(t, b, s, "roles/storage", map[string]any{"project_id": "project-1", "bucket": "aether"})
+
+	policy := policyOf(t, fake, "aether")
+	if len(policy.Statement) != 2 {
+		t.Fatalf("expected the existing statement to survive, got %+v", policy.Statement)
+	}
+	if policy.Statement[0].Sid != "allow-read-object" {
+		t.Fatal("the public read rule must stay first and intact")
+	}
+}
+
+func TestRewritingARoleChangesNothing(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/storage", map[string]any{"project_id": "project-1", "bucket": "aether"})
+	first := policyOf(t, fake, "aether")
+
+	write(t, b, s, "roles/storage", map[string]any{"project_id": "project-1", "bucket": "aether"})
+	second := policyOf(t, fake, "aether")
+
+	if len(first.Statement) != len(second.Statement) {
+		t.Fatal("rewriting the role must not add a second statement")
+	}
+	if got := principals(second.Statement[0]); len(got) != 1 {
+		t.Fatalf("the principal must not be duplicated, got %v", got)
+	}
+}
+
+func TestDeletingARoleTakesTheUserBackOut(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/storage", map[string]any{"project_id": "project-1", "bucket": "aether"})
+
+	if _, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.DeleteOperation,
+		Path:      "roles/storage",
+		Storage:   s,
+	}); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	policy := policyOf(t, fake, "aether")
+	if len(policy.Statement) != 0 {
+		t.Fatalf("the empty vault statement should be gone, got %+v", policy.Statement)
+	}
+
+	fake.lock.Lock()
+	defer fake.lock.Unlock()
+	if _, alive := fake.users["id-s3-storage"]; alive {
+		t.Fatal("the service user should have been removed with the role")
 	}
 }
