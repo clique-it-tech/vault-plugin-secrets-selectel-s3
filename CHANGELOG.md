@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.3.0...v1.3.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* stop reporting leased keys as orphans ([#8](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/issues/8)) ([660ba7f](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/660ba7f27db64fcf3fa2d53d8227a0279d47a40b))
+
 ## [1.3.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.2.0...v1.3.0) (2026-08-20)
 
 
