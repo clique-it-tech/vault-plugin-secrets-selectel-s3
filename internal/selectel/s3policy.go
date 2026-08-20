@@ -86,8 +86,15 @@ func (c *s3Client) send(ctx context.Context, method, bucket, query string, body 
 	}
 
 	sum := sha256.Sum256(body)
+	payloadHash := hex.EncodeToString(sum[:])
+	// S3 rebuilds the canonical request from this header, so it has to be on the
+	// wire as well as in the signature, or every request with a body comes back
+	// as SignatureDoesNotMatch.
+	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
+
 	creds := aws.Credentials{AccessKeyID: c.accessKey, SecretAccessKey: c.secretKey}
-	if err := v4.NewSigner().SignHTTP(ctx, creds, req, hex.EncodeToString(sum[:]), s3Service, c.region, time.Now().UTC()); err != nil {
+	signer := v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true })
+	if err := signer.SignHTTP(ctx, creds, req, payloadHash, s3Service, c.region, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 
