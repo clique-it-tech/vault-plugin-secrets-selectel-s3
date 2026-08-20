@@ -17,12 +17,11 @@ const (
 var errMissingConfig = errors.New("write config before asking for credentials")
 
 type selectelConfig struct {
-	AuthURL     string `json:"auth_url"`
-	IAMURL      string `json:"iam_url"`
-	AccountID   string `json:"account_id"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	ProjectName string `json:"project_name"`
+	AuthURL   string `json:"auth_url"`
+	IAMURL    string `json:"iam_url"`
+	AccountID string `json:"account_id"`
+	UserID    string `json:"user_id"`
+	Password  string `json:"password"`
 }
 
 func pathConfig(b *selectelBackend) *framework.Path {
@@ -34,12 +33,12 @@ func pathConfig(b *selectelBackend) *framework.Path {
 		Fields: map[string]*framework.FieldSchema{
 			"account_id": {
 				Type:        framework.TypeString,
-				Description: "Selectel account number the service user belongs to.",
+				Description: "Selectel account number. The engine asks for a token scoped to this account, which is where the iam.admin role lives.",
 				Required:    true,
 			},
-			"username": {
+			"user_id": {
 				Type:        framework.TypeString,
-				Description: "Service user allowed to manage S3 credentials through the IAM API.",
+				Description: "Id of the service user allowed to manage S3 credentials through the IAM API.",
 				Required:    true,
 			},
 			"password": {
@@ -49,11 +48,6 @@ func pathConfig(b *selectelBackend) *framework.Path {
 				DisplayAttrs: &framework.DisplayAttributes{
 					Sensitive: true,
 				},
-			},
-			"project_name": {
-				Type:        framework.TypeString,
-				Description: "Project the service user authenticates into.",
-				Required:    true,
 			},
 			"auth_url": {
 				Type:        framework.TypeString,
@@ -109,11 +103,10 @@ func (b *selectelBackend) pathConfigRead(ctx context.Context, req *logical.Reque
 
 	return &logical.Response{
 		Data: map[string]any{
-			"account_id":   config.AccountID,
-			"username":     config.Username,
-			"project_name": config.ProjectName,
-			"auth_url":     config.AuthURL,
-			"iam_url":      config.IAMURL,
+			"account_id": config.AccountID,
+			"user_id":    config.UserID,
+			"auth_url":   config.AuthURL,
+			"iam_url":    config.IAMURL,
 		},
 	}, nil
 }
@@ -130,14 +123,11 @@ func (b *selectelBackend) pathConfigWrite(ctx context.Context, req *logical.Requ
 	if raw, ok := data.GetOk("account_id"); ok {
 		config.AccountID = raw.(string)
 	}
-	if raw, ok := data.GetOk("username"); ok {
-		config.Username = raw.(string)
+	if raw, ok := data.GetOk("user_id"); ok {
+		config.UserID = raw.(string)
 	}
 	if raw, ok := data.GetOk("password"); ok {
 		config.Password = raw.(string)
-	}
-	if raw, ok := data.GetOk("project_name"); ok {
-		config.ProjectName = raw.(string)
 	}
 	if raw, ok := data.GetOk("auth_url"); ok {
 		config.AuthURL = raw.(string)
@@ -154,10 +144,9 @@ func (b *selectelBackend) pathConfigWrite(ctx context.Context, req *logical.Requ
 	}
 
 	for field, value := range map[string]string{
-		"account_id":   config.AccountID,
-		"username":     config.Username,
-		"password":     config.Password,
-		"project_name": config.ProjectName,
+		"account_id": config.AccountID,
+		"user_id":    config.UserID,
+		"password":   config.Password,
 	} {
 		if value == "" {
 			return logical.ErrorResponse("%s is required", field), nil

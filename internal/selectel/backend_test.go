@@ -96,12 +96,12 @@ func testBackend(t *testing.T, fake *fakeSelectel) (logical.Backend, logical.Sto
 	}
 
 	write(t, b, storage, "config", map[string]any{
-		"account_id":   "123456",
-		"username":     "vault",
-		"password":     "secret",
-		"project_name": "clique",
-		"auth_url":     fake.server.URL + "/identity/v3",
-		"iam_url":      fake.server.URL,
+		"account_id": "123456",
+		"user_id":    "user-stronghold",
+		"password":   "secret",
+
+		"auth_url": fake.server.URL + "/identity/v3",
+		"iam_url":  fake.server.URL,
 	})
 
 	return b, storage

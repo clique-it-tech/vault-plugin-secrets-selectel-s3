@@ -31,9 +31,8 @@ type client struct {
 	iamURL  string
 
 	account  string
-	username string
+	userID   string
 	password string
-	project  string
 
 	lock      sync.Mutex
 	token     string
@@ -46,9 +45,8 @@ func newClient(c *selectelConfig) *client {
 		authURL:  strings.TrimSuffix(c.AuthURL, "/"),
 		iamURL:   strings.TrimSuffix(c.IAMURL, "/"),
 		account:  c.AccountID,
-		username: c.Username,
+		userID:   c.UserID,
 		password: c.Password,
-		project:  c.ProjectName,
 	}
 }
 
@@ -82,17 +80,13 @@ func (c *client) authenticate(ctx context.Context) (string, error) {
 				"methods": []string{"password"},
 				"password": map[string]any{
 					"user": map[string]any{
-						"name":     c.username,
-						"domain":   map[string]string{"name": c.account},
+						"id":       c.userID,
 						"password": c.password,
 					},
 				},
 			},
 			"scope": map[string]any{
-				"project": map[string]any{
-					"name":   c.project,
-					"domain": map[string]string{"name": c.account},
-				},
+				"domain": map[string]string{"name": c.account},
 			},
 		},
 	}

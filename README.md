@@ -48,20 +48,24 @@ vault secrets enable -path=selectel -plugin-version=v1.0.0 vault-plugin-secrets-
 
 ## Configure
 
-The engine authenticates to Selectel as a service user that is allowed to manage
-S3 credentials through the IAM API. Give that user the `iam_admin` role, or the
-narrowest role your account offers that still permits credential management.
+The engine authenticates to Selectel as a service user holding the `iam.admin`
+role, which is what Selectel requires to issue S3 keys to other users. That role
+is granted on the account, so the engine asks Keystone for an **account-scoped**
+token, not a project-scoped one — a service user with no project role still
+works, and in fact needs none.
 
 ```shell
 vault write selectel/config \
   account_id=123456 \
-  username=vault \
-  password=... \
-  project_name=production
+  user_id=<id of the service user> \
+  password=...
 ```
 
-`auth_url` defaults to `https://cloud.api.selcloud.ru/identity/v3` and `iam_url`
-to `https://api.selectel.ru`; both can be overridden. The password is stored
+`account_id` is the account number, which Keystone knows as the domain name.
+`user_id` is the service user's id, not its login: authenticating by id avoids
+having to name the domain twice. `auth_url` defaults to
+`https://cloud.api.selcloud.ru/identity/v3` and `iam_url` to
+`https://api.selectel.ru`; both can be overridden. The password is stored
 seal-wrapped and is never returned by a read.
 
 ## Roles
