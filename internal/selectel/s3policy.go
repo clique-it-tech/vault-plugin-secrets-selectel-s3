@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	vaultStatementID = "allow-vault-issued"
-	s3Service        = "s3"
+	vaultStatementID  = "allow-vault-issued"
+	readerStatementID = "allow-vault-policy-reader"
+	s3Service         = "s3"
 )
 
 var bucketActions = []string{
@@ -164,13 +165,41 @@ func principals(st policyStatement) []string {
 	return nil
 }
 
-func vaultStatement(policy *bucketPolicy) int {
+func statementAt(policy *bucketPolicy, sid string) int {
 	for i, st := range policy.Statement {
-		if st.Sid == vaultStatementID {
+		if st.Sid == sid {
 			return i
 		}
 	}
 	return -1
+}
+
+func vaultStatement(policy *bucketPolicy) int {
+	return statementAt(policy, vaultStatementID)
+}
+
+// grantPolicyRead names the engine's reader in a statement of its own, with the
+// single action it needs. Keeping it apart from the consumers' statement makes
+// it obvious in the policy who reads and who uses the bucket.
+func grantPolicyRead(policy *bucketPolicy, bucket, readerID string) bool {
+	at := statementAt(policy, readerStatementID)
+	if at >= 0 && slices.Contains(principals(policy.Statement[at]), readerID) {
+		return false
+	}
+
+	statement := policyStatement{
+		Sid:       readerStatementID,
+		Effect:    "Allow",
+		Principal: map[string]any{"AWS": []any{readerID}},
+		Action:    []any{"s3:GetBucketPolicy"},
+		Resource:  []any{fmt.Sprintf("arn:aws:s3:::%s", bucket)},
+	}
+	if at < 0 {
+		policy.Statement = append(policy.Statement, statement)
+		return true
+	}
+	policy.Statement[at] = statement
+	return true
 }
 
 func grantBucketAccess(policy *bucketPolicy, bucket, userID string) bool {

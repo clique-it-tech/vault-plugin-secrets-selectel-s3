@@ -93,14 +93,28 @@ changes nothing. Deleting the role reverses both steps.
 | `ttl` | How long a key lives before Vault deletes it |
 | `max_ttl` | Ceiling for renewals, capped at 24h by the engine |
 
-### Why a bucket policy needs a second identity
+### Why a bucket policy takes two more identities
 
-Selectel refuses `PutBucketPolicy` to anything below the `s3.admin` role, and
-that role carries full control of every bucket in the project. Rather than hold
-it permanently, the engine creates a service user with `s3.admin`, uses its key
-for the single policy call, and deletes the user before returning — including
-when the call fails. The engine's own credential keeps `iam.admin` and nothing
-more, so a leak of the configured password cannot reach object data.
+Selectel splits the two halves of managing a policy between different roles, and
+gives neither both:
+
+* **Writing** needs `s3.admin`, which carries full control of every bucket in the
+  project. The engine will not hold that permanently. It creates a service user
+  with `s3.admin`, uses its key for the single policy call, and deletes the user
+  before returning — including when the call fails.
+* **Reading** is refused to `s3.admin` and allowed only to a principal the policy
+  already names. The engine keeps one long-lived user for this, `s3-vault-policy-reader`,
+  and writes it into each managed bucket under its own statement granting nothing
+  but `s3:GetBucketPolicy`.
+
+Consumers' service users are never used for either. Provisioning one role never
+issues a credential belonging to another, so a Vault policy that grants one role
+cannot cause a key to appear on someone else's user.
+
+The first role on a bucket the engine has not touched before is the one case that
+needs a person: nobody can read the policy yet, so grant `s3-vault-policy-reader`
+`s3:GetBucketPolicy` on that bucket once. The engine reports the exact id to grant
+when it hits this.
 
 ## Issue a key
 

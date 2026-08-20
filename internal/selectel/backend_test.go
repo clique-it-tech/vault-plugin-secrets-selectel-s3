@@ -441,10 +441,10 @@ func TestWritingARoleGrantsTheBucketAndCleansUpTheAdmin(t *testing.T) {
 	write(t, b, s, "roles/storage", map[string]any{"project_id": "project-1", "bucket": "aether"})
 
 	policy := policyOf(t, fake, "aether")
-	if len(policy.Statement) != 1 || policy.Statement[0].Sid != vaultStatementID {
-		t.Fatalf("expected one vault statement, got %+v", policy.Statement)
+	if statementAt(policy, vaultStatementID) < 0 || statementAt(policy, readerStatementID) < 0 {
+		t.Fatalf("expected the consumer and reader statements, got %+v", policy.Statement)
 	}
-	if got := principals(policy.Statement[0]); !slices.Contains(got, "id-s3-storage") {
+	if got := principals(policy.Statement[statementAt(policy, vaultStatementID)]); !slices.Contains(got, "id-s3-storage") {
 		t.Fatalf("expected the service user in the policy, got %v", got)
 	}
 
@@ -457,8 +457,8 @@ func TestWritingARoleGrantsTheBucketAndCleansUpTheAdmin(t *testing.T) {
 			}
 		}
 	}
-	if len(fake.users) != 1 {
-		t.Fatalf("only the role's own user should remain, got %v", fake.users)
+	if len(fake.users) != 2 {
+		t.Fatalf("expected the role's user and the reader to remain, got %v", fake.users)
 	}
 }
 
@@ -473,8 +473,8 @@ func TestWritingARoleKeepsForeignStatements(t *testing.T) {
 	write(t, b, s, "roles/storage", map[string]any{"project_id": "project-1", "bucket": "aether"})
 
 	policy := policyOf(t, fake, "aether")
-	if len(policy.Statement) != 2 {
-		t.Fatalf("expected the existing statement to survive, got %+v", policy.Statement)
+	if len(policy.Statement) != 3 {
+		t.Fatalf("expected the existing statement to survive alongside both of ours, got %+v", policy.Statement)
 	}
 	if policy.Statement[0].Sid != "allow-read-object" {
 		t.Fatal("the public read rule must stay first and intact")
@@ -514,8 +514,11 @@ func TestDeletingARoleTakesTheUserBackOut(t *testing.T) {
 	}
 
 	policy := policyOf(t, fake, "aether")
-	if len(policy.Statement) != 0 {
-		t.Fatalf("the empty vault statement should be gone, got %+v", policy.Statement)
+	if statementAt(policy, vaultStatementID) >= 0 {
+		t.Fatalf("the empty consumer statement should be gone, got %+v", policy.Statement)
+	}
+	if statementAt(policy, readerStatementID) < 0 {
+		t.Fatal("the reader belongs to the engine and must outlive one role")
 	}
 
 	fake.lock.Lock()
@@ -525,23 +528,57 @@ func TestDeletingARoleTakesTheUserBackOut(t *testing.T) {
 	}
 }
 
-func TestANewRoleBorrowsASiblingToReadThePolicy(t *testing.T) {
+func TestTheEngineKeepsItsOwnPolicyReader(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/first", map[string]any{"project_id": "project-1", "bucket": "aether"})
+
+	policy := policyOf(t, fake, "aether")
+	at := statementAt(policy, readerStatementID)
+	if at < 0 {
+		t.Fatalf("expected a statement for the reader, got %+v", policy.Statement)
+	}
+	if got := principals(policy.Statement[at]); !slices.Contains(got, "id-"+policyReaderName) {
+		t.Fatalf("expected the reader in its own statement, got %v", got)
+	}
+	action := policy.Statement[at].Action.([]any)
+	if len(action) != 1 || action[0] != "s3:GetBucketPolicy" {
+		t.Fatalf("the reader must be granted nothing but the read, got %v", action)
+	}
+
+	fake.lock.Lock()
+	fake.readableBy = map[string]struct{}{"id-" + policyReaderName: {}}
+	fake.lock.Unlock()
+
+	write(t, b, s, "roles/second", map[string]any{"project_id": "project-1", "bucket": "aether"})
+
+	got := principals(policyOf(t, fake, "aether").Statement[0])
+	for _, want := range []string{"id-s3-first", "id-s3-second"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("expected %s among the consumers, got %v", want, got)
+		}
+	}
+}
+
+func TestTheEngineNeverIssuesAKeyForAnotherRole(t *testing.T) {
 	fake := newFakeSelectel(t)
 	b, s := testBackend(t, fake)
 
 	write(t, b, s, "roles/first", map[string]any{"project_id": "project-1", "bucket": "aether"})
 
 	fake.lock.Lock()
-	fake.readableBy = map[string]struct{}{"id-s3-first": {}}
+	fake.readableBy = map[string]struct{}{"id-" + policyReaderName: {}}
+	fake.keyOwners = map[string]string{}
 	fake.lock.Unlock()
 
 	write(t, b, s, "roles/second", map[string]any{"project_id": "project-1", "bucket": "aether"})
 
-	policy := policyOf(t, fake, "aether")
-	got := principals(policy.Statement[0])
-	for _, want := range []string{"id-s3-first", "id-s3-second"} {
-		if !slices.Contains(got, want) {
-			t.Fatalf("expected %s in the policy, got %v", want, got)
+	fake.lock.Lock()
+	defer fake.lock.Unlock()
+	for _, owner := range fake.keyOwners {
+		if owner == "id-s3-first" {
+			t.Fatal("provisioning one role must never mint a key for another")
 		}
 	}
 }

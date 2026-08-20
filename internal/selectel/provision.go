@@ -200,11 +200,21 @@ func (b *selectelBackend) provisionRole(ctx context.Context, s logical.Storage, 
 		return err
 	}
 
-	policy, err := b.readBucketPolicyForRole(ctx, s, c, role, config)
+	reader, err := c.readerUser(ctx, role.ProjectID)
 	if err != nil {
 		return err
 	}
-	if !grantBucketAccess(policy, role.Bucket, role.ServiceUserID) {
+
+	policy, err := b.readBucketPolicy(ctx, s, c, role, config)
+	if err != nil {
+		return err
+	}
+
+	changed := grantBucketAccess(policy, role.Bucket, role.ServiceUserID)
+	if grantPolicyRead(policy, role.Bucket, reader.ID) {
+		changed = true
+	}
+	if !changed {
 		return nil
 	}
 
@@ -216,46 +226,32 @@ func (b *selectelBackend) provisionRole(ctx context.Context, s logical.Storage, 
 	})
 }
 
-// readBucketPolicyForRole reads the policy through whichever service user the
-// policy already names. A role's own user works once it has been granted, but a
-// brand new one has not been yet, so the engine falls back to a sibling role
-// bound to the same bucket. Only the very first role on a bucket has nobody to
-// borrow from, and that one needs an operator.
-func (b *selectelBackend) readBucketPolicyForRole(ctx context.Context, s logical.Storage, c *client, role *selectelRole, config *selectelConfig) (*bucketPolicy, error) {
-	policy, err := c.readBucketPolicy(ctx, role, config)
-	if err == nil {
-		return policy, nil
-	}
-	first := err
+const policyReaderName = "s3-vault-policy-reader"
 
-	names, listErr := s.List(ctx, rolesStoragePrefix)
-	if listErr != nil {
-		return nil, first
+// readerUser returns the engine's own identity for reading bucket policies,
+// creating it if this is the first time. Selectel lets s3.admin write a policy
+// but not read one, and only a principal the policy already names may read it.
+// Rather than reach for a consumer's credentials, the engine keeps one user
+// whose whole job is this read, and grants it nothing but s3:GetBucketPolicy.
+func (c *client) readerUser(ctx context.Context, projectID string) (*serviceUser, error) {
+	found, err := c.findServiceUser(ctx, policyReaderName)
+	if err != nil {
+		return nil, fmt.Errorf("could not look for the policy reader: %w", err)
 	}
-
-	for _, name := range names {
-		sibling, getErr := getRole(ctx, s, name)
-		if getErr != nil || sibling == nil {
-			continue
-		}
-		if sibling.Bucket != role.Bucket || sibling.ServiceUserID == role.ServiceUserID || sibling.ServiceUserID == "" {
-			continue
-		}
-		if policy, err := c.readBucketPolicy(ctx, sibling, config); err == nil {
-			return policy, nil
-		}
+	if found != nil {
+		return found, nil
 	}
-
-	return nil, first
+	return c.createServiceUser(ctx, policyReaderName, roleS3User, projectID)
 }
 
-// readBucketPolicy reads through a key of the given role's service user. Selectel
-// lets s3.admin write a bucket policy but not read one, so the only identity
-// that can see the current policy is a principal the policy already names. That
-// makes the first grant on a bucket an operator's job; afterwards the engine
-// names itself and can keep the policy up to date on its own.
-func (c *client) readBucketPolicy(ctx context.Context, role *selectelRole, config *selectelConfig) (*bucketPolicy, error) {
-	cred, err := c.createCredential(ctx, role.ServiceUserID, &credentialRequest{
+// readBucketPolicy reads the policy as the engine's own reader.
+func (b *selectelBackend) readBucketPolicy(ctx context.Context, s logical.Storage, c *client, role *selectelRole, config *selectelConfig) (*bucketPolicy, error) {
+	reader, err := c.readerUser(ctx, role.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+
+	cred, err := c.createCredential(ctx, reader.ID, &credentialRequest{
 		Name:      fmt.Sprintf("policy-read-%d", time.Now().UnixNano()),
 		ProjectID: role.ProjectID,
 	})
@@ -263,7 +259,7 @@ func (c *client) readBucketPolicy(ctx context.Context, role *selectelRole, confi
 		return nil, fmt.Errorf("could not issue a key to read the policy: %w", err)
 	}
 	defer func() {
-		_ = c.deleteCredential(ctx, role.ServiceUserID, cred.AccessKey)
+		_ = c.deleteCredential(ctx, reader.ID, cred.AccessKey)
 	}()
 
 	s3 := newS3Client(config.S3Endpoint, config.S3Region, cred.AccessKey, cred.SecretKey)
@@ -271,8 +267,8 @@ func (c *client) readBucketPolicy(ctx context.Context, role *selectelRole, confi
 	if err != nil {
 		return nil, fmt.Errorf(
 			"could not read the policy of %s: %w. Selectel only shows a bucket policy to a principal it already names, "+
-				"so grant %s s3:GetBucketPolicy on that bucket once, then this role manages itself",
-			role.Bucket, err, role.ServiceUserID)
+				"so grant %s (%s) s3:GetBucketPolicy on that bucket once and the engine takes it from there",
+			role.Bucket, err, policyReaderName, reader.ID)
 	}
 	return policy, nil
 }
@@ -294,7 +290,7 @@ func (b *selectelBackend) deprovisionRole(ctx context.Context, s logical.Storage
 			return err
 		}
 
-		policy, err := b.readBucketPolicyForRole(ctx, s, c, role, config)
+		policy, err := b.readBucketPolicy(ctx, s, c, role, config)
 		if err != nil {
 			return err
 		}
