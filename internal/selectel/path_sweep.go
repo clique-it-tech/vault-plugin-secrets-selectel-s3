@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -29,15 +31,22 @@ func pathSweep(b *selectelBackend) *framework.Path {
 				Description: "Delete the keys instead of only listing them.",
 				Default:     false,
 			},
+			"older_than": {
+				Type: framework.TypeDurationSecond,
+				Description: "Only consider keys minted longer ago than this. " +
+					"Defaults to the role's max_ttl, which is the longest a lease can hold a key.",
+			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.ReadOperation:   &framework.PathOperation{Callback: b.pathSweepRun},
 			logical.UpdateOperation: &framework.PathOperation{Callback: b.pathSweepRun},
 		},
-		HelpSynopsis: "Find keys this engine issued that no lease owns any more.",
+		HelpSynopsis: "Find keys this engine issued that no lease can still own.",
 		HelpDescription: `Selectel keys never expire on their own, so a revocation that never
-completed leaves a working key behind. This lists every key on the role's service user whose name
-this engine minted, and deletes them when asked. Keys not named by this engine are left alone.`,
+completed leaves a working key behind. A lease cannot outlive the role's max_ttl, so any key this
+engine minted longer ago than that and which Selectel still lists has outlived every lease that
+could have owned it. Keys younger than that may still be in use and are never touched, and keys
+this engine did not mint are left alone.`,
 	}
 }
 
@@ -65,20 +74,27 @@ func (b *selectelBackend) pathSweepRun(ctx context.Context, req *logical.Request
 		return nil, fmt.Errorf("could not list the s3 credentials: %w", err)
 	}
 
-	held, err := leasedAccessKeys(ctx, req.Storage)
-	if err != nil {
-		return nil, err
+	age := role.MaxTTL
+	if raw, ok := data.GetOk("older_than"); ok {
+		age = time.Duration(raw.(int)) * time.Second
 	}
+	if age <= 0 {
+		return logical.ErrorResponse("older_than must be positive; the role has no max_ttl to fall back on"), nil
+	}
+	cutoff := time.Now().Add(-age)
 
 	remove := data.Get("delete").(bool)
 	orphans := make([]string, 0)
+	skipped := 0
 	deleted := 0
 
 	for _, cred := range existing {
-		if !strings.HasPrefix(cred.Name, credentialNamePrefix) {
+		mintedAt, ok := mintedAt(cred.Name)
+		if !ok {
 			continue
 		}
-		if _, ok := held[cred.AccessKey]; ok {
+		if mintedAt.After(cutoff) {
+			skipped++
 			continue
 		}
 
@@ -94,36 +110,25 @@ func (b *selectelBackend) pathSweepRun(ctx context.Context, req *logical.Request
 
 	return &logical.Response{
 		Data: map[string]any{
-			"orphans": orphans,
-			"deleted": deleted,
+			"orphans":     orphans,
+			"deleted":     deleted,
+			"still_young": skipped,
+			"older_than":  int(age.Seconds()),
 		},
 	}, nil
 }
 
-func leasedAccessKeys(ctx context.Context, s logical.Storage) (map[string]struct{}, error) {
-	held := make(map[string]struct{})
-
-	leases, err := s.List(ctx, "leases/")
-	if err != nil {
-		return held, nil
+func mintedAt(name string) (time.Time, bool) {
+	if !strings.HasPrefix(name, credentialNamePrefix) {
+		return time.Time{}, false
 	}
-
-	for _, lease := range leases {
-		entry, err := s.Get(ctx, "leases/"+lease)
-		if err != nil || entry == nil {
-			continue
-		}
-
-		var stored struct {
-			InternalData map[string]any `json:"internal_data"`
-		}
-		if err := entry.DecodeJSON(&stored); err != nil {
-			continue
-		}
-		if key, ok := stored.InternalData["access_key"].(string); ok {
-			held[key] = struct{}{}
-		}
+	at := strings.LastIndex(name, "-")
+	if at < 0 {
+		return time.Time{}, false
 	}
-
-	return held, nil
+	nanos, err := strconv.ParseInt(name[at+1:], 10, 64)
+	if err != nil || nanos <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(0, nanos), true
 }

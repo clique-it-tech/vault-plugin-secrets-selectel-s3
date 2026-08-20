@@ -3,6 +3,7 @@ package selectel
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -373,24 +374,53 @@ func TestRevokeToleratesAKeyThatIsAlreadyGone(t *testing.T) {
 	}
 }
 
-func TestSweepReportsOrphansAndLeavesForeignKeys(t *testing.T) {
+func agedKey(role string, age time.Duration) credential {
+	minted := time.Now().Add(-age).UnixNano()
+	name := fmt.Sprintf("%s%s-%d", credentialNamePrefix, role, minted)
+	return credential{AccessKey: "AK" + name, Name: name}
+}
+
+func TestSweepLeavesKeysYoungEnoughToStillBeLeased(t *testing.T) {
 	fake := newFakeSelectel(t)
 	b, s := testBackend(t, fake)
 
 	write(t, b, s, "roles/storage", map[string]any{
 		"service_user_id": "user-1",
 		"project_id":      "project-1",
+		"max_ttl":         3600,
 	})
 	read(t, b, s, "creds/storage")
 
+	resp := read(t, b, s, "sweep/storage")
+	if orphans := resp.Data["orphans"].([]string); len(orphans) != 0 {
+		t.Fatalf("a key issued a moment ago cannot be an orphan, got %v", orphans)
+	}
+	if resp.Data["still_young"].(int) != 1 {
+		t.Fatalf("the fresh key should be counted as young, got %v", resp.Data["still_young"])
+	}
+}
+
+func TestSweepReportsKeysOlderThanAnyLeaseCouldBe(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/storage", map[string]any{
+		"service_user_id": "user-1",
+		"project_id":      "project-1",
+		"max_ttl":         3600,
+	})
+	read(t, b, s, "creds/storage")
+
+	stale := agedKey("storage", 4*time.Hour)
 	fake.lock.Lock()
+	fake.credentials[stale.AccessKey] = stale
 	fake.credentials["AKmanual"] = credential{AccessKey: "AKmanual", Name: "made-by-hand"}
 	fake.lock.Unlock()
 
 	resp := read(t, b, s, "sweep/storage")
 	orphans := resp.Data["orphans"].([]string)
-	if len(orphans) != 1 || !strings.HasPrefix(orphans[0], "AK"+credentialNamePrefix) {
-		t.Fatalf("expected only the vault key to be reported, got %v", orphans)
+	if len(orphans) != 1 || orphans[0] != stale.AccessKey {
+		t.Fatalf("expected only the stale key, got %v", orphans)
 	}
 	if resp.Data["deleted"].(int) != 0 {
 		t.Fatal("a plain read must not delete anything")
@@ -403,8 +433,66 @@ func TestSweepReportsOrphansAndLeavesForeignKeys(t *testing.T) {
 	if _, ok := fake.credentials["AKmanual"]; !ok {
 		t.Fatal("a key this engine did not issue must survive the sweep")
 	}
-	if len(fake.credentials) != 1 {
-		t.Fatalf("expected the orphan to be gone, left with %v", fake.credentials)
+	if _, ok := fake.credentials[stale.AccessKey]; ok {
+		t.Fatal("the stale key should have been deleted")
+	}
+	if len(fake.credentials) != 2 {
+		t.Fatalf("the fresh key and the manual one should remain, left with %v", fake.credentials)
+	}
+}
+
+func TestSweepHonoursAnExplicitAge(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/storage", map[string]any{
+		"service_user_id": "user-1",
+		"project_id":      "project-1",
+		"max_ttl":         3600,
+	})
+
+	recent := agedKey("storage", 10*time.Minute)
+	fake.lock.Lock()
+	fake.credentials[recent.AccessKey] = recent
+	fake.lock.Unlock()
+
+	if orphans := read(t, b, s, "sweep/storage").Data["orphans"].([]string); len(orphans) != 0 {
+		t.Fatalf("ten minutes is inside the hour-long max_ttl, got %v", orphans)
+	}
+
+	resp, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "sweep/storage",
+		Storage:   s,
+		Data:      map[string]any{"older_than": 300},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orphans := resp.Data["orphans"].([]string); len(orphans) != 1 {
+		t.Fatalf("with a five minute cutoff the key is stale, got %v", orphans)
+	}
+}
+
+func TestSweepRefusesWhenNoAgeCanBeEstablished(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/storage", map[string]any{
+		"service_user_id": "user-1",
+		"project_id":      "project-1",
+	})
+
+	resp, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.ReadOperation,
+		Path:      "sweep/storage",
+		Storage:   s,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("a role without max_ttl must not be swept blindly, got %v", resp)
 	}
 }
 
