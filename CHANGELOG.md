@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.4.0...v1.5.0) (2026-08-21)
+
+
+### Features
+
+* hold one key for consumers that re-read on a timer ([#12](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/issues/12)) ([9e8aeb0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/9e8aeb042cab0ecc74401c77913bffede66f1064))
+
 ## [1.4.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.3.1...v1.4.0) (2026-08-20)
 
 
