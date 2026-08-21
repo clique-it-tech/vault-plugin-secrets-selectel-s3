@@ -122,6 +122,11 @@ func mintedAt(name string) (time.Time, bool) {
 	if !strings.HasPrefix(name, credentialNamePrefix) {
 		return time.Time{}, false
 	}
+	// A static role's key is meant to outlive any lease, so age says nothing
+	// about whether it is still in use.
+	if strings.HasPrefix(name, staticCredentialNamePrefix) {
+		return time.Time{}, false
+	}
 	at := strings.LastIndex(name, "-")
 	if at < 0 {
 		return time.Time{}, false

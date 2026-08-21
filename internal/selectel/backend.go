@@ -38,6 +38,7 @@ func backend() *selectelBackend {
 		},
 		Paths: framework.PathAppend(
 			pathRoles(b),
+			pathStaticRoles(b),
 			[]*framework.Path{
 				pathConfig(b),
 				pathRotateRoot(b),

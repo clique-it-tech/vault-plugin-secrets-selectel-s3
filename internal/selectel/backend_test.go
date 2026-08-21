@@ -914,3 +914,127 @@ func TestDroppingRefusesToEmptyThePolicy(t *testing.T) {
 		t.Fatalf("emptying a policy must be refused, got %v", resp)
 	}
 }
+
+func staticKeysIn(fake *fakeSelectel) []credential {
+	out := make([]credential, 0)
+	for _, c := range fake.credentials {
+		if strings.HasPrefix(c.Name, staticCredentialNamePrefix) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func staticRoleFixture(t *testing.T, b logical.Backend, s logical.Storage) {
+	t.Helper()
+	write(t, b, s, "static-roles/backups", map[string]any{
+		"project_id": "project-1",
+		"bucket":     "clq-backups",
+	})
+}
+
+func TestReadingStaticCredentialsTwiceReturnsTheSameKey(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+	staticRoleFixture(t, b, s)
+
+	first := read(t, b, s, "static-creds/backups")
+	second := read(t, b, s, "static-creds/backups")
+
+	if first.Data["access_key"] != second.Data["access_key"] {
+		t.Fatalf("a static role must hand out one key, got %v then %v",
+			first.Data["access_key"], second.Data["access_key"])
+	}
+	if first.Data["secret_key"] == "" || first.Data["secret_key"] != second.Data["secret_key"] {
+		t.Fatal("the secret key must come back unchanged too")
+	}
+
+	fake.lock.Lock()
+	defer fake.lock.Unlock()
+	if n := len(staticKeysIn(fake)); n != 1 {
+		t.Fatalf("reading must not mint keys, the role holds %d", n)
+	}
+}
+
+func TestRotatingAStaticRoleReplacesTheKeyAndDropsTheOldOne(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+	staticRoleFixture(t, b, s)
+
+	before := read(t, b, s, "static-creds/backups").Data["access_key"].(string)
+	write(t, b, s, "rotate-role/backups", map[string]any{})
+	after := read(t, b, s, "static-creds/backups").Data["access_key"].(string)
+
+	if before == after {
+		t.Fatal("rotation must produce a different key")
+	}
+
+	fake.lock.Lock()
+	defer fake.lock.Unlock()
+	if _, ok := fake.credentials[before]; ok {
+		t.Fatal("the old key must be gone from selectel")
+	}
+	if _, ok := fake.credentials[after]; !ok {
+		t.Fatal("the new key must be present")
+	}
+	if n := len(staticKeysIn(fake)); n != 1 {
+		t.Fatalf("rotation must leave exactly one key, got %d", n)
+	}
+}
+
+func TestSweepLeavesStaticKeysAlone(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+	staticRoleFixture(t, b, s)
+
+	// возраст статичного ключа ничего не говорит о том, нужен ли он
+	stale := credential{
+		AccessKey: "AKstatic",
+		Name:      fmt.Sprintf("%sbackups-%d", staticCredentialNamePrefix, time.Now().Add(-72*time.Hour).UnixNano()),
+	}
+	fake.lock.Lock()
+	fake.credentials[stale.AccessKey] = stale
+	fake.lock.Unlock()
+
+	write(t, b, s, "roles/storage", map[string]any{
+		"service_user_id": "user-1",
+		"project_id":      "project-1",
+		"max_ttl":         3600,
+	})
+	resp := read(t, b, s, "sweep/storage")
+	for _, o := range resp.Data["orphans"].([]string) {
+		if o == stale.AccessKey {
+			t.Fatal("sweep must never touch a static role's key")
+		}
+	}
+
+	write(t, b, s, "sweep/storage", map[string]any{"delete": true})
+	fake.lock.Lock()
+	defer fake.lock.Unlock()
+	if _, ok := fake.credentials[stale.AccessKey]; !ok {
+		t.Fatal("the static key was deleted by the sweep")
+	}
+}
+
+func TestAStaticRoleCannotShadowADynamicOne(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "roles/backups", map[string]any{
+		"service_user_id": "user-1",
+		"project_id":      "project-1",
+	})
+
+	resp, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.CreateOperation,
+		Path:      "static-roles/backups",
+		Storage:   s,
+		Data:      map[string]any{"project_id": "project-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("sharing a name with a dynamic role must be refused, got %v", resp)
+	}
+}
