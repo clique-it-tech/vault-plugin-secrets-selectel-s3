@@ -30,11 +30,18 @@ func pathSweep(b *selectelBackend) *framework.Path {
 				Type:        framework.TypeBool,
 				Description: "Delete the keys instead of only listing them.",
 				Default:     false,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name: "Delete what is found",
+				},
 			},
 			"older_than": {
 				Type: framework.TypeDurationSecond,
 				Description: "Only consider keys minted longer ago than this. " +
 					"Defaults to the role's max_ttl, which is the longest a lease can hold a key.",
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:     "Older than",
+					EditType: "ttl",
+				},
 			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{

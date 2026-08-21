@@ -41,23 +41,42 @@ func pathRoles(b *selectelBackend) []*framework.Path {
 				"service_user_id": {
 					Type:        framework.TypeString,
 					Description: "Existing service user to bind to. Leave it out and the engine creates one named after the role.",
+					DisplayAttrs: &framework.DisplayAttributes{
+						Name:  "Existing service user",
+						Group: "Advanced",
+					},
 				},
 				"bucket": {
 					Type:        framework.TypeString,
 					Description: "Bucket this role may reach. Writing the role adds its service user to that bucket's policy; deleting the role takes it back out.",
+					DisplayAttrs: &framework.DisplayAttributes{
+						Name:  "Bucket",
+						Value: "clq-backups",
+					},
 				},
 				"project_id": {
 					Type:        framework.TypeString,
 					Description: "Project the credential is created in.",
 					Required:    true,
+					DisplayAttrs: &framework.DisplayAttributes{
+						Name: "Project id",
+					},
 				},
 				"ttl": {
 					Type:        framework.TypeDurationSecond,
 					Description: "How long an issued key stays valid before Vault deletes it.",
+					DisplayAttrs: &framework.DisplayAttributes{
+						Name:     "Lease",
+						EditType: "ttl",
+					},
 				},
 				"max_ttl": {
 					Type:        framework.TypeDurationSecond,
 					Description: "Ceiling for renewals of an issued key.",
+					DisplayAttrs: &framework.DisplayAttributes{
+						Name:     "Longest lease",
+						EditType: "ttl",
+					},
 				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{

@@ -28,11 +28,18 @@ func pathDropStatement(b *selectelBackend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "Project the bucket belongs to.",
 				Required:    true,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name: "Project id",
+				},
 			},
 			"sids": {
 				Type:        framework.TypeCommaStringSlice,
 				Description: "Sids of the statements to remove. Nothing else in the policy is touched.",
 				Required:    true,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:  "Statements to remove",
+					Value: "allow-all-sa",
+				},
 			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{

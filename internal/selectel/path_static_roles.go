@@ -59,10 +59,17 @@ func pathStaticRoles(b *selectelBackend) []*framework.Path {
 					Type:        framework.TypeString,
 					Description: "Project the service user belongs to.",
 					Required:    true,
+					DisplayAttrs: &framework.DisplayAttributes{
+						Name: "Project id",
+					},
 				},
 				"bucket": {
 					Type:        framework.TypeString,
 					Description: "Bucket the key may act on. Leave empty to grant nothing beyond what the bucket policy already says.",
+					DisplayAttrs: &framework.DisplayAttributes{
+						Name:  "Bucket",
+						Value: "clq-backups",
+					},
 				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{

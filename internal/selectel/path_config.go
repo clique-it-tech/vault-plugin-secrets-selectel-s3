@@ -40,39 +40,64 @@ func pathConfig(b *selectelBackend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "Selectel account number. The engine asks for a token scoped to this account, which is where the iam.admin role lives.",
 				Required:    true,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:  "Account number",
+					Value: "348727",
+				},
 			},
 			"user_id": {
 				Type:        framework.TypeString,
 				Description: "Id of the service user allowed to manage S3 credentials through the IAM API.",
 				Required:    true,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name: "Service user id",
+				},
 			},
 			"password": {
 				Type:        framework.TypeString,
 				Description: "Password of that service user.",
 				Required:    true,
 				DisplayAttrs: &framework.DisplayAttributes{
+					Name:      "Password",
 					Sensitive: true,
+					EditType:  "password",
 				},
 			},
 			"auth_url": {
 				Type:        framework.TypeString,
 				Description: "Keystone endpoint that issues IAM tokens.",
 				Default:     defaultAuthURL,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:  "Keystone endpoint",
+					Group: "Endpoints",
+				},
 			},
 			"iam_url": {
 				Type:        framework.TypeString,
 				Description: "Base URL of the Selectel IAM API.",
 				Default:     defaultIAMURL,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:  "IAM endpoint",
+					Group: "Endpoints",
+				},
 			},
 			"s3_endpoint": {
 				Type:        framework.TypeString,
 				Description: "Object storage endpoint, used when a role manages a bucket policy.",
 				Default:     defaultS3Endpoint,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:  "Object storage endpoint",
+					Group: "Endpoints",
+				},
 			},
 			"s3_region": {
 				Type:        framework.TypeString,
 				Description: "Region the object storage endpoint belongs to.",
 				Default:     defaultS3Region,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:  "Region",
+					Group: "Endpoints",
+				},
 			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{

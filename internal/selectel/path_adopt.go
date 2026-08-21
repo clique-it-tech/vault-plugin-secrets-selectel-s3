@@ -28,11 +28,18 @@ func pathAdoptBucket(b *selectelBackend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "Project the bucket belongs to.",
 				Required:    true,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name: "Project id",
+				},
 			},
 			"policy": {
 				Type: framework.TypeString,
 				Description: "The bucket's current policy, as JSON. Read it with any key the policy " +
 					"already names. Leave it out if the engine can already read the bucket.",
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:     "Current policy",
+					EditType: "textarea",
+				},
 			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
