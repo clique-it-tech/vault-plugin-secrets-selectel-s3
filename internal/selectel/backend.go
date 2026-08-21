@@ -34,7 +34,7 @@ func backend() *selectelBackend {
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
 		PathsSpecial: &logical.Paths{
-			SealWrapStorage: []string{configStoragePath, rolesStoragePrefix + "*"},
+			SealWrapStorage: []string{configStoragePath, rolesStoragePrefix + "*", staticRoleStoragePrefix + "*"},
 		},
 		Paths: framework.PathAppend(
 			pathRoles(b),
@@ -51,8 +51,9 @@ func backend() *selectelBackend {
 		Secrets: []*framework.Secret{
 			b.s3Credential(),
 		},
-		BackendType: logical.TypeLogical,
-		Invalidate:  b.invalidate,
+		BackendType:  logical.TypeLogical,
+		Invalidate:   b.invalidate,
+		PeriodicFunc: b.rotateDueStaticRoles,
 	}
 
 	return b

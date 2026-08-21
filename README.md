@@ -215,11 +215,23 @@ vault write selectel/static-roles/backups \
 vault read selectel/static-creds/backups
 ```
 
-Reading returns the same key every time and mints nothing. The key changes only when you say so:
+Reading returns the same key every time and mints nothing.
+
+Give the role a rotation period and the engine replaces the key on its own; leave it out and the
+key changes only when you ask:
 
 ```sh
-vault write -f selectel/rotate-role/backups
+vault write selectel/static-roles/backups \
+  project_id=<project> \
+  bucket=clq-backups \
+  rotation_period=720h
+
+vault write -f selectel/rotate-role/backups   # whenever you want it sooner
 ```
+
+With a period set, `static-creds` also reports `ttl`, the seconds left before the engine rotates
+by itself. A role without a period has no countdown to report and returns none, rather than a
+number that means nothing.
 
 Rotation mints the new key and stores it before deleting the old one, so a failure halfway leaves
 the role holding a key that works rather than none. Consumers pick the new one up on their next

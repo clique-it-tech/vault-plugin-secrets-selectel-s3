@@ -1038,3 +1038,83 @@ func TestAStaticRoleCannotShadowADynamicOne(t *testing.T) {
 		t.Fatalf("sharing a name with a dynamic role must be refused, got %v", resp)
 	}
 }
+
+func agedStaticRole(t *testing.T, s logical.Storage, name string, since time.Duration) *staticRole {
+	t.Helper()
+	role, err := getStaticRole(context.Background(), s, name)
+	if err != nil || role == nil {
+		t.Fatalf("static role %q is missing: %v", name, err)
+	}
+	role.LastRotation = time.Now().Add(-since)
+	if err := storeStaticRole(context.Background(), s, name, role); err != nil {
+		t.Fatal(err)
+	}
+	return role
+}
+
+func TestTheScheduleRotatesAStaticRoleThatIsDue(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+	write(t, b, s, "static-roles/backups", map[string]any{
+		"project_id":      "project-1",
+		"bucket":          "clq-backups",
+		"rotation_period": 3600,
+	})
+
+	before := read(t, b, s, "static-creds/backups").Data["access_key"].(string)
+	agedStaticRole(t, s, "backups", 2*time.Hour)
+
+	if err := b.(*selectelBackend).rotateDueStaticRoles(context.Background(), &logical.Request{Storage: s}); err != nil {
+		t.Fatal(err)
+	}
+
+	after := read(t, b, s, "static-creds/backups").Data["access_key"].(string)
+	if before == after {
+		t.Fatal("a role past its rotation period must be rotated")
+	}
+	if n := len(staticKeysIn(fake)); n != 1 {
+		t.Fatalf("the old key should be gone, the role holds %d", n)
+	}
+}
+
+func TestTheScheduleLeavesAManualRoleAlone(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+	write(t, b, s, "static-roles/backups", map[string]any{
+		"project_id": "project-1",
+		"bucket":     "clq-backups",
+	})
+
+	before := read(t, b, s, "static-creds/backups").Data["access_key"].(string)
+	agedStaticRole(t, s, "backups", 365*24*time.Hour)
+
+	if err := b.(*selectelBackend).rotateDueStaticRoles(context.Background(), &logical.Request{Storage: s}); err != nil {
+		t.Fatal(err)
+	}
+
+	after := read(t, b, s, "static-creds/backups").Data["access_key"].(string)
+	if before != after {
+		t.Fatal("a role without a rotation period must never rotate on its own, however old it is")
+	}
+}
+
+func TestStaticCredentialsReportTimeUntilTheNextRotation(t *testing.T) {
+	fake := newFakeSelectel(t)
+	b, s := testBackend(t, fake)
+
+	write(t, b, s, "static-roles/scheduled", map[string]any{
+		"project_id":      "project-1",
+		"rotation_period": 3600,
+	})
+	ttl, ok := read(t, b, s, "static-creds/scheduled").Data["ttl"].(int64)
+	if !ok || ttl <= 0 || ttl > 3600 {
+		t.Fatalf("expected a countdown inside the hour, got %v", ttl)
+	}
+
+	write(t, b, s, "static-roles/manual", map[string]any{
+		"project_id": "project-1",
+	})
+	if _, present := read(t, b, s, "static-creds/manual").Data["ttl"]; present {
+		t.Fatal("a role that never rotates by itself must not pretend to have a countdown")
+	}
+}

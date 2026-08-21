@@ -16,13 +16,23 @@ const (
 )
 
 type staticRole struct {
-	ServiceUserID   string    `json:"service_user_id"`
-	ServiceUserName string    `json:"service_user_name"`
-	ProjectID       string    `json:"project_id"`
-	Bucket          string    `json:"bucket"`
-	AccessKey       string    `json:"access_key"`
-	SecretKey       string    `json:"secret_key"`
-	LastRotation    time.Time `json:"last_rotation"`
+	ServiceUserID   string        `json:"service_user_id"`
+	ServiceUserName string        `json:"service_user_name"`
+	ProjectID       string        `json:"project_id"`
+	Bucket          string        `json:"bucket"`
+	AccessKey       string        `json:"access_key"`
+	SecretKey       string        `json:"secret_key"`
+	LastRotation    time.Time     `json:"last_rotation"`
+	RotationPeriod  time.Duration `json:"rotation_period"`
+}
+
+// nextRotation reports when the engine will replace the key by itself. The zero
+// time means never: a role without a rotation period changes only when asked.
+func (r *staticRole) nextRotation() time.Time {
+	if r.RotationPeriod <= 0 {
+		return time.Time{}
+	}
+	return r.LastRotation.Add(r.RotationPeriod)
 }
 
 func staticRoleNotFound(name string) error {
@@ -69,6 +79,15 @@ func pathStaticRoles(b *selectelBackend) []*framework.Path {
 					DisplayAttrs: &framework.DisplayAttributes{
 						Name:  "Bucket",
 						Value: "clq-backups",
+					},
+				},
+				"rotation_period": {
+					Type: framework.TypeDurationSecond,
+					Description: "How often the engine replaces the key on its own. " +
+						"Leave it out and the key changes only when rotate-role is called.",
+					DisplayAttrs: &framework.DisplayAttributes{
+						Name:     "Rotate every",
+						EditType: "ttl",
 					},
 				},
 			},
@@ -184,6 +203,7 @@ func (b *selectelBackend) pathStaticRoleRead(ctx context.Context, req *logical.R
 		"service_user_name": role.ServiceUserName,
 		"access_key":        role.AccessKey,
 		"last_rotation":     role.LastRotation.Format(time.RFC3339),
+		"rotation_period":   int64(role.RotationPeriod.Seconds()),
 	}}, nil
 }
 
@@ -204,6 +224,9 @@ func (b *selectelBackend) pathStaticRoleWrite(ctx context.Context, req *logical.
 	}
 	if bucket, ok := data.GetOk("bucket"); ok {
 		role.Bucket = bucket.(string)
+	}
+	if period, ok := data.GetOk("rotation_period"); ok {
+		role.RotationPeriod = time.Duration(period.(int)) * time.Second
 	}
 	if role.ProjectID == "" {
 		return logical.ErrorResponse("project_id is required"), nil
@@ -252,11 +275,15 @@ func (b *selectelBackend) pathStaticCredsRead(ctx context.Context, req *logical.
 	if role.AccessKey == "" {
 		return logical.ErrorResponse("static role %q holds no key yet; rotate it", name), nil
 	}
-	return &logical.Response{Data: map[string]any{
+	out := map[string]any{
 		"access_key":    role.AccessKey,
 		"secret_key":    role.SecretKey,
 		"last_rotation": role.LastRotation.Format(time.RFC3339),
-	}}, nil
+	}
+	if next := role.nextRotation(); !next.IsZero() {
+		out["ttl"] = int64(max(0, int64(time.Until(next).Seconds())))
+	}
+	return &logical.Response{Data: out}, nil
 }
 
 func (b *selectelBackend) pathStaticRoleRotate(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
@@ -268,24 +295,54 @@ func (b *selectelBackend) pathStaticRoleRotate(ctx context.Context, req *logical
 	if role == nil {
 		return logical.ErrorResponse(staticRoleNotFound(name).Error()), nil
 	}
-
-	previous := role.AccessKey
-	if err := b.mintStaticKey(ctx, req.Storage, name, role); err != nil {
-		return nil, err
-	}
-	if previous == "" {
-		return nil, nil
-	}
-
-	c, err := b.getClient(ctx, req.Storage)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.deleteCredential(ctx, role.ServiceUserID, previous); err != nil && !errors.Is(err, errCredentialNotFound) {
-		return logical.ErrorResponse(
-			"the new key is in place, but the old one %s could not be deleted: %s", previous, err), nil
+	if err := b.rotateStaticRole(ctx, req.Storage, name, role); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
 	}
 	return nil, nil
+}
+
+// rotateDueStaticRoles is what makes a rotation period mean anything: Vault
+// calls it on the active node about once a minute. A role that cannot be
+// rotated is logged and skipped, so one broken role never stops the others.
+func (b *selectelBackend) rotateDueStaticRoles(ctx context.Context, req *logical.Request) error {
+	names, err := req.Storage.List(ctx, staticRoleStoragePrefix)
+	if err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		role, err := getStaticRole(ctx, req.Storage, name)
+		if err != nil || role == nil {
+			continue
+		}
+		next := role.nextRotation()
+		if next.IsZero() || time.Now().Before(next) {
+			continue
+		}
+		if err := b.rotateStaticRole(ctx, req.Storage, name, role); err != nil {
+			b.Logger().Error("could not rotate static role", "role", name, "error", err)
+		}
+	}
+	return nil
+}
+
+func (b *selectelBackend) rotateStaticRole(ctx context.Context, s logical.Storage, name string, role *staticRole) error {
+	previous := role.AccessKey
+	if err := b.mintStaticKey(ctx, s, name, role); err != nil {
+		return err
+	}
+	if previous == "" {
+		return nil
+	}
+
+	c, err := b.getClient(ctx, s)
+	if err != nil {
+		return err
+	}
+	if err := c.deleteCredential(ctx, role.ServiceUserID, previous); err != nil && !errors.Is(err, errCredentialNotFound) {
+		return fmt.Errorf("the new key is in place, but the old one %s could not be deleted: %w", previous, err)
+	}
+	return nil
 }
 
 // mintStaticKey puts the new key in storage before anything else can fail, so a
