@@ -198,6 +198,54 @@ secret_key         ...
 
 `vault lease revoke <lease_id>` deletes the key immediately.
 
+## A key that outlives the read
+
+A role hands out a new key every time it is read, which suits a consumer that asks once when it
+starts. Some consumers cannot work that way: a CSI driver keeping a Kubernetes secret in sync
+re-reads on a timer, and CNPG's backup plugin only knows how to read a secret someone else keeps
+fresh. At a two-minute poll a dynamic role would mint seven hundred keys a day.
+
+A static role holds one key instead:
+
+```sh
+vault write selectel/static-roles/backups \
+  project_id=<project> \
+  bucket=clq-backups
+
+vault read selectel/static-creds/backups
+```
+
+Reading returns the same key every time and mints nothing.
+
+Give the role a rotation period and the engine replaces the key on its own; leave it out and the
+key changes only when you ask:
+
+```sh
+vault write selectel/static-roles/backups \
+  project_id=<project> \
+  bucket=clq-backups \
+  rotation_period=720h
+
+vault write -f selectel/rotate-role/backups   # whenever you want it sooner
+```
+
+With a period set, `static-creds` also reports `ttl`, the seconds left before the engine rotates
+by itself. A role without a period has no countdown to report and returns none, rather than a
+number that means nothing.
+
+Rotation mints the new key and stores it before deleting the old one, so a failure halfway leaves
+the role holding a key that works rather than none. Consumers pick the new one up on their next
+read; anything holding the previous key keeps working until it re-reads, so rotate with that
+window in mind.
+
+A static role gets its own service user, named `s3-static-<role>` rather than `s3-<role>`, and the
+engine refuses a static role whose name a dynamic role already uses — sharing one service user
+between the two would let a dynamic revocation delete the static key. For the same reason the
+sweep ignores static keys entirely: their age says nothing about whether they are still in use.
+
+There is no schedule. Rotation is a command you run, which keeps the engine free of opinions about
+how often a key should change.
+
 ## Sweeping orphans
 
 If Vault cannot reach Selectel while a lease is being revoked, the key stays
