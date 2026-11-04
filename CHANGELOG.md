@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.5.0...v1.5.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* bump vulnerable dependencies and scan with govulncheck ([#15](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/issues/15)) ([617de42](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/commit/617de425a02f21234dbda7e9712593338614fe26))
+
 ## [1.5.0](https://github.com/clique-it-tech/vault-plugin-secrets-selectel-s3/compare/v1.4.0...v1.5.0) (2026-08-21)
 
 
